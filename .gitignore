@@ -63,3 +63,7 @@ uploads/
 *.key
 *.p12
 *.jks
+
+### Local application config (contains hardcoded API keys, kept out of repo) ###
+src/main/resources/application.yml
+src/main/resources/application-*.yml
