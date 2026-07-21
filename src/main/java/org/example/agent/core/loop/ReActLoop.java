@@ -1,22 +1,26 @@
 package org.example.agent.core.loop;
 
-import com.alibaba.cloud.ai.graph.NodeOutput;
-import com.alibaba.cloud.ai.graph.agent.ReactAgent;
-import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
-import com.alibaba.cloud.ai.graph.streaming.OutputType;
-import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
-import org.example.agent.core.event.ActionInvokedEvent;
-import org.example.agent.core.event.ActionPreCheckEvent;
-import org.example.agent.core.event.LoopErrorEvent;
-import org.example.agent.core.event.ObservationEvent;
+import org.example.agent.core.budget.AgentBudget;
 import org.example.agent.core.event.ThoughtEvent;
 import org.example.agent.core.kind.StepKind;
-import org.example.agent.core.budget.AgentBudget;
 import org.example.agent.core.observer.ReActLoopObserver;
 import org.example.agent.core.record.StepRecord;
 import org.example.agent.core.signal.ReActLoopSignal;
+import org.example.agent.core.task.AgentTask;
+import org.example.agent.tool.gateway.ToolGateway;
+import org.example.agent.tool.rollback.SideEffectTracker;
+import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.tool.ToolCallback;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -30,219 +34,236 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  * 单个 ReAct 循环的执行单元。
  *
- * 关键设计：
- *  - 内部持有 Spring AI Alibaba 的 ReactAgent（4.1 阶段对底层的唯一接触点）
- *  - 暴露一个 {@link #subscribe(String, Map, List, ReActLoopSignal)} 方法，
- *    让 AgentRuntimeImpl 把上层的「观察者 + 信号面」喂进来，由本类负责把
- *    Flux<NodeOutput> 中的 OutputType 翻译成 AgentEvent 并触发观察者
- *  - 同时增量记录 StepRecord，方便 AgentRuntimeImpl 落到 AgentExecutionRecord
- *  - 线程模型：所有 event 派发与 StepRecord 累积都在订阅线程（Flux 的线程）
- *    同步进行，不引入额外线程切换
+ * <p>Part 2 改造：把 tool_call 循环纳入本类，绕过 Spring AI 的
+ * {@code internalToolExecutionEnabled} 自动执行，由 {@link ToolGateway} 统一处理
+ * 沙箱 / 重试 / 事件。
  *
- * ReActLoop 本身不强制 budget（不知道 maxSteps / maxTokens），它把这件事
- * 委托给 observers（TokenBudgetObserver / LoopStepObserver / TimeoutObserver）。
+ * <p>循环形态：
+ * <pre>
+ *   messages = [system, user]
+ *   loop:
+ *     response = chatModel.call(prompt(messages, options))
+ *     assistant = response.getResult().getOutput()
+ *     if not assistant.hasToolCalls():
+ *         fullAnswer = assistant.getText()
+ *         break
+ *     messages.add(assistant)
+ *     for each toolCall in assistant.getToolCalls():
+ *         result = toolGateway.invoke(name, args, step, signal, observers)
+ *         toolResponses.add(new ToolResponse(toolCall.id, name, result))
+ *     messages.add(new ToolResponseMessage(toolResponses))
+ *     if signal.isTerminateRequested(): break
+ * </pre>
+ *
+ * <p>step 计数由 LoopStepObserver 接管（每次 gateway.emitObservation 触发 +1）。
  */
 public class ReActLoop {
 
     private static final Logger log = LoggerFactory.getLogger(ReActLoop.class);
 
-    private final String executionId;
-    private final ReactAgent reactAgent;
-    private final AgentBudget budget;
+    /** 兜底：单次执行最多调模型 16 次，防止 tool_call 互相调用导致的无限循环。 */
+    private static final int MAX_MODEL_ITERATIONS = 16;
 
-    public ReActLoop(String executionId, ReactAgent reactAgent, AgentBudget budget) {
+    private final String executionId;
+    private final ChatModel chatModel;
+    private final AgentTask task;
+    private final String agentName;
+    private final AgentBudget budget;
+    private final ToolGateway toolGateway;
+    private final List<ToolCallback> toolCallbacks;
+    private final SideEffectTracker sideEffects;
+
+    public ReActLoop(String executionId,
+                     ChatModel chatModel,
+                     AgentTask task,
+                     AgentBudget budget,
+                     ToolGateway toolGateway,
+                     List<ToolCallback> toolCallbacks,
+                     SideEffectTracker sideEffects) {
         this.executionId = executionId;
-        this.reactAgent = reactAgent;
+        this.chatModel = chatModel;
+        this.task = task;
+        this.agentName = safeName(task.getRole(), "intelligent_assistant");
         this.budget = budget;
+        this.toolGateway = toolGateway;
+        this.toolCallbacks = toolCallbacks == null ? List.of() : toolCallbacks;
+        this.sideEffects = sideEffects;
+        log.info("executionId={} ReActLoop initialized with {} tool callbacks: {}",
+                executionId,
+                this.toolCallbacks.size(),
+                this.toolCallbacks.stream().map(cb -> cb.getToolDefinition().name()).toList());
     }
 
     public String getExecutionId() { return executionId; }
-    public ReactAgent getReactAgent() { return reactAgent; }
+    public ChatModel getChatModel() { return chatModel; }
+    public AgentTask getTask() { return task; }
+    public String getAgentName() { return agentName; }
     public AgentBudget getBudget() { return budget; }
 
-    /**
-     * 订阅一次执行。返回本次执行产生的所有 StepRecord（按时间顺序）。
-     * 调用方应在 subscribe 之前准备好 observers + signal。
-     *
-     * @param input          用户输入文本
-     * @param toolArgsMap    本次执行用到的 tool 参数表（key=toolName, value=空 args 占位）；
-     *                       当前 Spring AI Alibaba 不对外暴露 per-step args，
-     *                       故本参数保留给未来 hook/observer 扩展点
-     * @param observers      事件订阅者列表
-     * @param signal         协作式控制面（observers 通过它发起强制终止）
-     * @return 本次执行追加的 StepRecord 列表
-     */
-    public List<StepRecord> subscribe(String input,
-                                      Map<String, Object> toolArgsMap,
-                                      List<ReActLoopObserver> observers,
-                                      ReActLoopSignal signal) {
+    public record SubscribeResult(List<StepRecord> records, String fullAnswer) {
+    }
+
+    public SubscribeResult subscribe(String input,
+                                     Map<String, Object> toolArgsMap,
+                                     List<ReActLoopObserver> observers,
+                                     ReActLoopSignal signal) {
         AtomicInteger stepCounter = new AtomicInteger(0);
         AtomicLong lastStepStart = new AtomicLong(System.currentTimeMillis());
         List<StepRecord> records = Collections.synchronizedList(new ArrayList<>());
         StringBuilder fullAnswer = new StringBuilder();
+        List<Message> messages = new ArrayList<>(buildInitialMessages(input));
 
-        List<NodeOutput> outputs = invokeInternal(input);
-        for (NodeOutput output : outputs) {
-            if (signal.isTerminateRequested()) {
-                break;
+        // 绑定副作用追踪器到当前 executionId —— FileTools 之后写入文件会在这里登记。
+        // 失败路径触发的 rollbackAll() 也读这个 ThreadLocal,所以必须在循环入口 bind,出口 clear。
+        sideEffects.bind(executionId);
+        try {
+            for (int iter = 0; iter < MAX_MODEL_ITERATIONS; iter++) {
+                if (signal.isTerminateRequested()) {
+                    log.info("executionId={} signal terminate before iter={}", executionId, iter);
+                    break;
+                }
+
+                Prompt prompt = buildPrompt(messages);
+                ChatResponse response = chatModel.call(prompt);
+                if (response == null) {
+                    throw new IllegalStateException("ChatModel.call returned null response");
+                }
+                AssistantMessage assistant = response.getResult() == null
+                        ? null : response.getResult().getOutput();
+                if (assistant == null) {
+                    throw new IllegalStateException("ChatModel.call returned no output");
+                }
+
+                String text = assistant.getText();
+                long promptTokens = 0L;
+                long completionTokens = 0L;
+                if (response.getMetadata() != null && response.getMetadata().getUsage() != null) {
+                    var u = response.getMetadata().getUsage();
+                    promptTokens = u.getPromptTokens() == null ? 0L : u.getPromptTokens();
+                    completionTokens = u.getCompletionTokens() == null ? 0L : u.getCompletionTokens();
+                }
+                Instant at = Instant.now();
+                int step = stepCounter.incrementAndGet();
+                lastStepStart.set(System.currentTimeMillis());
+
+                // 任何模型输出都先 emit ThoughtEvent（即使后面有 tool_calls）
+                emitThought(observers, buildThoughtEvent(at, step, text, promptTokens, completionTokens), signal);
+                records.add(StepRecord.builder()
+                        .stepIndex(step)
+                        .kind(StepKind.THOUGHT)
+                        .at(at)
+                        .agentName(agentName)
+                        .thoughtSummary(text)
+                        .latencyMs(System.currentTimeMillis() - lastStepStart.get())
+                        .tokensConsumed(promptTokens + completionTokens)
+                        .build());
+
+                // 路径分叉：tool_calls vs 最终回答
+                log.info("executionId={} model response: hasToolCalls={} toolCallCount={} text={}",
+                        executionId,
+                        assistant.hasToolCalls(),
+                        assistant.hasToolCalls() ? assistant.getToolCalls().size() : 0,
+                        text == null ? "<null>" : (text.length() > 200 ? text.substring(0, 200) + "..." : text));
+                if (!assistant.hasToolCalls()) {
+                    if (text != null) {
+                        fullAnswer.append(text);
+                    }
+                    break;
+                }
+
+                // 把 AssistantMessage（含 tool_calls）加进历史，模型下一轮能看见自己刚才要调什么
+                messages.add(assistant);
+
+                List<ToolResponseMessage.ToolResponse> toolResponses = new ArrayList<>();
+                for (AssistantMessage.ToolCall tc : assistant.getToolCalls()) {
+                    if (signal.isTerminateRequested()) {
+                        break;
+                    }
+                    String result = toolGateway.invoke(
+                            executionId, tc.name(), tc.arguments(), step, signal, observers);
+                    toolResponses.add(new ToolResponseMessage.ToolResponse(
+                            tc.id(), tc.name(), result == null ? "" : result));
+                }
+                if (!toolResponses.isEmpty()) {
+                    messages.add(ToolResponseMessage.builder()
+                            .responses(toolResponses)
+                            .build());
+
+                    // TODO(v2): 上下文窗口压缩 —— 当出现 LOGIC + rollback 时,本轮 (Assistant + ToolResponse)
+                    // 已被标记为"已撤销的历史",下一轮 prompt 应当把它折叠成单行摘要,而不是原样塞进 messages。
+                    // 触发现条件: toolResponses 里只要有一个状态由 ToolGateway 回包成
+                    // [logic-rollback] 头,就调用 ContextCompressionHook.compressAfterRollback(messages, ...)
+                    // 把它压成一个 ≤ N token 的 "rollback summary" 行塞回去。
+                    // 当前 v1 简化:不压缩,完整历史会一直累积直到 budget 上限触发 FINISH。
+                }
             }
-            dispatch(output, observers, signal, stepCounter, lastStepStart, records, fullAnswer);
+        } catch (Exception ex) {
+            log.error("executionId={} call failed", executionId, ex);
+            throw new IllegalStateException("ChatModel.call failed: " + ex.getMessage(), ex);
+        } finally {
+            // 出口清理 —— 即便发生异常也不留 orphan session
+            sideEffects.clear();
         }
 
-        return records;
-    }
-
-    /** 当前累积的 fullAnswer，用于 AgentRuntime 上报最终答案。 */
-    public static String extractFinalAnswer(StringBuilder builder) {
-        return builder.toString();
+        return new SubscribeResult(records, fullAnswer.toString());
     }
 
     // ============== 内部 ==============
 
-    private List<NodeOutput> invokeInternal(String input) {
-        try {
-            // stream 返回 Flux<NodeOutput>，为了简化线程模型与测试，
-            // 4.1 阶段使用 buffer 收集一次性处理。生产路径可改成 subscribe。
-            return reactAgent.stream(input).collectList().block();
-        } catch (GraphRunnerException e) {
-            throw new IllegalStateException("ReactAgent.stream failed: " + e.getMessage(), e);
+    private List<Message> buildInitialMessages(String input) {
+        List<Message> msgs = new ArrayList<>();
+        Map<String, Object> vars = new HashMap<>();
+        if (task.getPromptVariables() != null) {
+            vars.putAll(task.getPromptVariables());
         }
+        vars.put("input", input);
+        if (task.getSessionId() != null) vars.put("sessionId", task.getSessionId());
+        if (task.getRole() != null) vars.put("role", task.getRole());
+
+        StringBuilder sys = new StringBuilder();
+        sys.append("你是一个专业的智能助手，能调用工具回答用户问题。\n");
+        sys.append("当前任务上下文：\n");
+        for (Map.Entry<String, Object> e : vars.entrySet()) {
+            sys.append("- ").append(e.getKey()).append(": ").append(e.getValue()).append("\n");
+        }
+        if (task.getToolAllowList() != null && !task.getToolAllowList().isEmpty()) {
+            sys.append("可用工具：").append(String.join(", ", task.getToolAllowList())).append("\n");
+        } else if (!toolCallbacks.isEmpty()) {
+            sys.append("你可以使用以下工具，必要时主动调用。\n");
+        }
+        msgs.add(new SystemMessage(sys.toString()));
+        msgs.add(new UserMessage(input));
+        return msgs;
     }
 
-    private void dispatch(NodeOutput output,
-                          List<ReActLoopObserver> observers,
-                          ReActLoopSignal signal,
-                          AtomicInteger stepCounter,
-                          AtomicLong lastStepStart,
-                          List<StepRecord> records,
-                          StringBuilder fullAnswer) {
-        Instant at = Instant.now();
-        try {
-            if (output instanceof StreamingOutput streaming) {
-                OutputType type = streaming.getOutputType();
-                if (type == OutputType.AGENT_MODEL_FINISHED) {
-                    int step = stepCounter.incrementAndGet();
-                    String text = streaming.message() == null ? "" : streaming.message().getText();
-                    if (text != null) {
-                        fullAnswer.append(text);
-                    }
-                    long prompt = 0L;
-                    long completion = 0L;
-                    if (streaming.message() instanceof org.springframework.ai.chat.messages.AssistantMessage am) {
-                        Map<String, Object> meta = am.getMetadata();
-                        if (meta != null) {
-                            Object usage = meta.get("usage");
-                            if (usage instanceof org.springframework.ai.chat.metadata.Usage u) {
-                                prompt = u.getPromptTokens() == null ? 0L : u.getPromptTokens();
-                                completion = u.getCompletionTokens() == null ? 0L : u.getCompletionTokens();
-                            }
-                        }
-                    }
-                    ThoughtEvent ev = ThoughtEvent.builder()
-                            .executionId(executionId)
-                            .at(at)
-                            .stepIndex(step)
-                            .agentName(reactAgent.name())
-                            .thoughtText(text)
-                            .promptTokens(prompt)
-                            .completionTokens(completion)
-                            .build();
-                    safeInvokeThought(observers, ev, signal);
-                    records.add(StepRecord.builder()
-                            .stepIndex(step)
-                            .kind(StepKind.THOUGHT)
-                            .at(at)
-                            .agentName(reactAgent.name())
-                            .thoughtSummary(text)
-                            .latencyMs(System.currentTimeMillis() - lastStepStart.get())
-                            .tokensConsumed(prompt + completion)
-                            .build());
-                    lastStepStart.set(System.currentTimeMillis());
-                } else if (type == OutputType.AGENT_MODEL_STREAMING) {
-                    // 流式增量 chunk 把文本持续追加 fullAnswer，不开新 step
-                    String chunk = streaming.chunk();
-                    if (chunk != null && !chunk.isEmpty()) {
-                        fullAnswer.append(chunk);
-                    }
-                } else if (type == OutputType.AGENT_TOOL_FINISHED) {
-                    int step = stepCounter.get();
-                    String toolName = streaming.chunk();
-                    if (toolName == null || toolName.isBlank()) {
-                        toolName = streaming.node();
-                    }
-                    ActionInvokedEvent inv = ActionInvokedEvent.builder()
-                            .executionId(executionId)
-                            .at(at)
-                            .stepIndex(step)
-                            .agentName(reactAgent.name())
-                            .toolName(toolName)
-                            .build();
-                    safeInvokeActionInvoked(observers, inv, signal);
-                    ObservationEvent obs = ObservationEvent.builder()
-                            .executionId(executionId)
-                            .at(at)
-                            .stepIndex(step)
-                            .agentName(reactAgent.name())
-                            .toolName(toolName)
-                            .status(ObservationEvent.Status.OK)
-                            .observationText(streaming.message() == null ? "" : streaming.message().getText())
-                            .latencyMs(System.currentTimeMillis() - lastStepStart.get())
-                            .build();
-                    safeInvokeObservation(observers, obs, signal);
-                    records.add(StepRecord.builder()
-                            .stepIndex(step)
-                            .kind(StepKind.ACTION)
-                            .at(at)
-                            .agentName(reactAgent.name())
-                            .toolName(toolName)
-                            .toolArgs(new HashMap<>())
-                            .build());
-                    records.add(StepRecord.builder()
-                            .stepIndex(step)
-                            .kind(StepKind.OBSERVATION)
-                            .at(at)
-                            .agentName(reactAgent.name())
-                            .toolName(toolName)
-                            .observationText(obs.getObservationText())
-                            .latencyMs(obs.getLatencyMs())
-                            .build());
-                    lastStepStart.set(System.currentTimeMillis());
-                }
-            }
-        } catch (Exception ex) {
-            log.error("executionId={} dispatch failed", executionId, ex);
-            LoopErrorEvent err = LoopErrorEvent.builder()
-                    .executionId(executionId)
-                    .at(at)
-                    .stepIndex(stepCounter.get())
-                    .agentName(reactAgent.name())
-                    .message(ex.getMessage())
-                    .error(ex)
-                    .build();
-            safeInvokeError(observers, err, signal);
-        }
-    }
-
-    private void safeInvokeThought(List<ReActLoopObserver> os, ThoughtEvent e, ReActLoopSignal s) {
-        for (ReActLoopObserver o : os) { try { o.onThought(e, s); } catch (Exception ex) { log.warn("observer onThought failed", ex); } }
-    }
-    private void safeInvokeActionInvoked(List<ReActLoopObserver> os, ActionInvokedEvent e, ReActLoopSignal s) {
-        // 先 preCheck
-        ActionPreCheckEvent pre = ActionPreCheckEvent.builder()
-                .executionId(e.getExecutionId())
-                .at(e.getAt())
-                .stepIndex(e.getStepIndex())
-                .agentName(e.getAgentName())
-                .toolName(e.getToolName())
-                .args(Map.of())
+    private Prompt buildPrompt(List<Message> messages) {
+        DashScopeChatOptions options = DashScopeChatOptions.builder()
+                .toolCallbacks(toolCallbacks)
+                .internalToolExecutionEnabled(false)
                 .build();
-        for (ReActLoopObserver o : os) { try { o.onActionPreCheck(pre, s); } catch (Exception ex) { log.warn("observer onActionPreCheck failed", ex); } }
-        for (ReActLoopObserver o : os) { try { o.onActionInvoked(e, s); } catch (Exception ex) { log.warn("observer onActionInvoked failed", ex); } }
+        return new Prompt(messages, options);
     }
-    private void safeInvokeObservation(List<ReActLoopObserver> os, ObservationEvent e, ReActLoopSignal s) {
-        for (ReActLoopObserver o : os) { try { o.onObservation(e, s); } catch (Exception ex) { log.warn("observer onObservation failed", ex); } }
+
+    private ThoughtEvent buildThoughtEvent(Instant at, int step, String text,
+                                           long promptTokens, long completionTokens) {
+        return ThoughtEvent.builder()
+                .executionId(executionId)
+                .at(at)
+                .stepIndex(step)
+                .agentName(agentName)
+                .thoughtText(text)
+                .promptTokens(promptTokens)
+                .completionTokens(completionTokens)
+                .build();
     }
-    private void safeInvokeError(List<ReActLoopObserver> os, LoopErrorEvent e, ReActLoopSignal s) {
-        for (ReActLoopObserver o : os) { try { o.onError(e, s); } catch (Exception ex) { log.warn("observer onError failed", ex); } }
+
+    private void emitThought(List<ReActLoopObserver> observers, ThoughtEvent e, ReActLoopSignal s) {
+        for (ReActLoopObserver o : observers) {
+            try { o.onThought(e, s); } catch (Exception ex) { log.warn("observer onThought failed", ex); }
+        }
+    }
+
+    private static String safeName(String role, String fallback) {
+        return (role == null || role.isBlank()) ? fallback : role;
     }
 }

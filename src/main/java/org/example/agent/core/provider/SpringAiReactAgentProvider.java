@@ -4,10 +4,15 @@ import com.alibaba.cloud.ai.graph.agent.Builder;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import org.example.agent.core.runtime.ReactAgentProvider;
 import org.example.agent.core.task.AgentTask;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.ai.chat.model.ChatModel;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -18,16 +23,29 @@ import java.util.Map;
  *  - 工具：通过 Spring 上下文收集 ToolCallbackProvider / MethodTools
  *  - 提示词：使用 AgentTask.promptVariables 拼一段简易系统提示
  *
+ * Part 1 修改说明：
+ *  - 早期版本用 @Autowired Object[] methodTools 会把容器里所有 bean 都吸进来，
+ *    包括 CliRenderer 这类非工具 bean，造成循环依赖。
+ *  - 改为 ObjectProvider + 反射过滤（只接受包含 @Tool 方法的对象），Part 2 会扩展。
+ *  - Part 1 阶段没有任何 @Tool 类，methodTools 始终为空数组；toolCallbackProvider 也暂未注入。
+ *
  * 业务方不需要直接实现 Provider，只需按需覆盖 provider 即可（参见 guide 5 章）。
  */
 @Component
 public class SpringAiReactAgentProvider implements ReactAgentProvider {
 
-    @Autowired(required = false)
-    private Object[] methodTools = new Object[0];
+    private final ObjectProvider<Object> beanProvider;
+    private final ObjectProvider<ToolCallbackProvider> toolCallbackProvider;
+    private final ChatModel chatModel;
 
-    @Autowired(required = false)
-    private org.springframework.ai.tool.ToolCallbackProvider toolCallbackProvider;
+    public SpringAiReactAgentProvider(
+            ObjectProvider<Object> beanProvider,
+            ObjectProvider<ToolCallbackProvider> toolCallbackProvider,
+            ChatModel chatModel) {
+        this.beanProvider = beanProvider;
+        this.toolCallbackProvider = toolCallbackProvider;
+        this.chatModel = chatModel;
+    }
 
     @Override
     public ReactAgent build(AgentTask task) {
@@ -40,16 +58,48 @@ public class SpringAiReactAgentProvider implements ReactAgentProvider {
         if (task.getRole() != null) vars.put("role", task.getRole());
 
         Builder b = ReactAgent.builder()
+                .model(this.chatModel)
                 .name(safeName(task.getRole(), "intelligent_assistant"))
                 .systemPrompt(buildSystemPrompt(task, vars));
 
-        if (methodTools != null && methodTools.length > 0) {
+        Object[] methodTools = collectToolObjects();
+        if (methodTools.length > 0) {
             b.methodTools(methodTools);
         }
         if (toolCallbackProvider != null) {
-            b.tools(toolCallbackProvider.getToolCallbacks());
+            ToolCallbackProvider provider = toolCallbackProvider.getIfAvailable();
+            if (provider != null) {
+                b.tools(provider.getToolCallbacks());
+            }
         }
         return b.build();
+    }
+
+    /**
+     * 收集包含 @Tool 方法的对象（按类扫描）。过滤掉没有 @Tool 注解的 bean，
+     * 避免 Spring AI 把任意对象当作工具源。
+     */
+    private Object[] collectToolObjects() {
+        List<Object> tools = new ArrayList<>();
+        if (beanProvider == null) return new Object[0];
+        for (Object bean : beanProvider) {
+            if (bean == null) continue;
+            boolean hasToolMethod = false;
+            try {
+                for (java.lang.reflect.Method m : bean.getClass().getMethods()) {
+                    if (m.isAnnotationPresent(org.springframework.ai.tool.annotation.Tool.class)) {
+                        hasToolMethod = true;
+                        break;
+                    }
+                }
+            } catch (Exception ex) {
+                continue;
+            }
+            if (hasToolMethod) {
+                tools.add(bean);
+            }
+        }
+        return tools.toArray();
     }
 
     private String buildSystemPrompt(AgentTask task, Map<String, Object> vars) {

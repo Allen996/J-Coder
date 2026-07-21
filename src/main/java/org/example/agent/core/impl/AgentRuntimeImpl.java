@@ -12,6 +12,7 @@ import org.example.agent.core.loop.ReActLoop;
 import org.example.agent.core.observer.EventRecordingObserver;
 import org.example.agent.core.observer.LoopStepObserver;
 import org.example.agent.core.observer.ReActLoopObserver;
+import org.example.agent.core.observer.SinkEmittingObserver;
 import org.example.agent.core.observer.TimeoutObserver;
 import org.example.agent.core.observer.TokenBudgetObserver;
 import org.example.agent.core.reason.FinishReason;
@@ -19,9 +20,15 @@ import org.example.agent.core.record.AgentExecutionRecord;
 import org.example.agent.core.registry.ExecutionRegistry;
 import org.example.agent.core.result.AgentExecutionResult;
 import org.example.agent.core.runtime.AgentRuntime;
-import org.example.agent.core.runtime.ReactAgentProvider;
 import org.example.agent.core.signal.DefaultReActLoopSignal;
 import org.example.agent.core.task.AgentTask;
+import org.example.agent.tool.gateway.ToolGateway;
+import org.example.agent.tool.rollback.SideEffectTracker;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.FluxSink;
@@ -53,19 +60,39 @@ import java.util.concurrent.Executors;
 @Component
 public class AgentRuntimeImpl implements AgentRuntime {
 
-    private final ReactAgentProvider agentProvider;
+    private final ChatModel chatModel;
+    private final ToolGateway toolGateway;
+    private final ToolCallbackProvider toolCallbackProvider;
+    private final SideEffectTracker sideEffectTracker;
     private final ExecutionRegistry registry;
     private final List<ReActLoopObserver> observers = new CopyOnWriteArrayList<>();
     private final ExecutorService blockingExecutor;
 
-    public AgentRuntimeImpl(ReactAgentProvider agentProvider) {
-        this(agentProvider, defaultBlockingExecutor());
+    @Autowired
+    public AgentRuntimeImpl(ChatModel chatModel,
+                            ToolGateway toolGateway,
+                            ObjectProvider<ToolCallbackProvider> toolCallbackProvider,
+                            SideEffectTracker sideEffectTracker) {
+        this(chatModel, toolGateway, toolCallbackProvider, sideEffectTracker, defaultBlockingExecutor());
     }
 
-    public AgentRuntimeImpl(ReactAgentProvider agentProvider, ExecutorService blockingExecutor) {
-        this.agentProvider = agentProvider;
+    public AgentRuntimeImpl(ChatModel chatModel,
+                            ToolGateway toolGateway,
+                            ObjectProvider<ToolCallbackProvider> toolCallbackProvider,
+                            SideEffectTracker sideEffectTracker,
+                            ExecutorService blockingExecutor) {
+        this.chatModel = chatModel;
+        this.toolGateway = toolGateway;
+        this.toolCallbackProvider = toolCallbackProvider.getIfAvailable();
+        this.sideEffectTracker = sideEffectTracker;
         this.registry = new ExecutionRegistry();
         this.blockingExecutor = blockingExecutor;
+    }
+
+    private List<ToolCallback> currentToolCallbacks() {
+        return toolCallbackProvider == null
+                ? java.util.List.of()
+                : java.util.List.of(toolCallbackProvider.getToolCallbacks());
     }
 
     private static ExecutorService defaultBlockingExecutor() {
@@ -82,7 +109,8 @@ public class AgentRuntimeImpl implements AgentRuntime {
     public AgentExecutionResult execute(AgentTask task) {
         ExecutionContext ctx = prepare(task);
         try {
-            ctx.reactLoop.subscribe(task.getInput(), java.util.Map.of(), ctx.observers, ctx.signal);
+            ReActLoop.SubscribeResult sr = ctx.reactLoop.subscribe(task.getInput(), java.util.Map.of(), ctx.observers, ctx.signal);
+            ctx.fullAnswer = sr.fullAnswer();
             return finalize(ctx, null);
         } catch (RuntimeException ex) {
             return finalize(ctx, ex);
@@ -93,6 +121,10 @@ public class AgentRuntimeImpl implements AgentRuntime {
     public Flux<AgentEvent> stream(AgentTask task) {
         ExecutionContext ctx = prepare(task);
         return Flux.create(sink -> {
+            // 增量发射桥：放到 observers 链最前，每个事件触发时立即 sink.next
+            SinkEmittingObserver bridge = new SinkEmittingObserver(sink);
+            ctx.observers.add(0, bridge);
+
             AgentHandle handle = AgentHandle.builder()
                     .executionId(ctx.executionId)
                     .cancelAction(() -> {
@@ -109,14 +141,15 @@ public class AgentRuntimeImpl implements AgentRuntime {
                 sink.onCancel(() -> handle.cancelNow());
 
                 try {
-                    ctx.reactLoop.subscribe(task.getInput(), java.util.Map.of(), ctx.observers, ctx.signal);
+                    ReActLoop.SubscribeResult sr = ctx.reactLoop.subscribe(task.getInput(), java.util.Map.of(), ctx.observers, ctx.signal);
+                    ctx.fullAnswer = sr.fullAnswer();
                     AgentExecutionResult result = finalize(ctx, null);
-                    pushEvents(ctx.recorder.getEvents(), sink);
+                    // bridge 已经在 finalize 的 onFinish dispatch 中 emit 过 FinishEvent
                     handle.markDone(result.getReason().name());
                     sink.complete();
                 } catch (RuntimeException ex) {
                     AgentExecutionResult result = finalize(ctx, ex);
-                    pushEvents(ctx.recorder.getEvents(), sink);
+                    // finalize 已通过 observer 派发 LoopErrorEvent + FinishEvent，bridge 已 sink.next
                     handle.markDone(result.getReason().name());
                     sink.error(new RuntimeException(result.getReason().name(), ex));
                 }
@@ -171,7 +204,8 @@ public class AgentRuntimeImpl implements AgentRuntime {
         chain.add(timeoutObs);
 
         DefaultReActLoopSignal signal = new DefaultReActLoopSignal();
-        ReActLoop loop = new ReActLoop(executionId, agentProvider.build(task), budget);
+        ReActLoop loop = new ReActLoop(executionId, chatModel, task, budget, toolGateway,
+                currentToolCallbacks(), sideEffectTracker);
         AgentExecutionRecord.Builder recordBuilder = AgentExecutionRecord.builder()
                 .executionId(executionId)
                 .task(task)
@@ -243,6 +277,11 @@ public class AgentRuntimeImpl implements AgentRuntime {
         }
 
         String finalAnswer = collectFinalAnswer(ctx);
+        // ReActLoop.subscribe 累积的 fullAnswer 是流式增量的权威来源，优先采用；
+        // 当 subscribe 失败（thrown != null）时退到 recorder 里的 ThoughtEvent 拼接。
+        if (ctx.fullAnswer != null && !ctx.fullAnswer.isEmpty()) {
+            finalAnswer = ctx.fullAnswer;
+        }
         if (reason != FinishReason.FINISH && (finalAnswer == null || finalAnswer.isEmpty())) {
             finalAnswer = defaultFallback(reason);
         }
@@ -309,15 +348,6 @@ public class AgentRuntimeImpl implements AgentRuntime {
         }
     }
 
-    private static void pushEvents(List<AgentEvent> events, FluxSink<AgentEvent> sink) {
-        for (AgentEvent e : events) {
-            if (sink.isCancelled()) {
-                return;
-            }
-            sink.next(e);
-        }
-    }
-
     /** 单次执行的内部状态。 */
     private static final class ExecutionContext {
         final String executionId;
@@ -330,6 +360,8 @@ public class AgentRuntimeImpl implements AgentRuntime {
         final TimeoutObserver timeoutObs;
         final EventRecordingObserver recorder;
         final AgentExecutionRecord.Builder recordBuilder;
+        // 由 execute() / stream() 在 reactLoop.subscribe() 返回后写入，作为 finalAnswer 权威源
+        volatile String fullAnswer;
 
         ExecutionContext(String executionId,
                          AgentBudget budget,

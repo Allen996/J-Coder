@@ -22,7 +22,9 @@
         <spring-ai.version>1.1.0</spring-ai.version>
         <spring-ai-alibaba.version>1.1.0.0-RC2</spring-ai-alibaba.version>
         <spring-ai-alibaba-extensions.version>1.1.0.0-RC2</spring-ai-alibaba-extensions.version>
+        <jline.version>3.26.3</jline.version>
     </properties>
+
     <dependencyManagement>
         <dependencies>
             <dependency>
@@ -70,54 +72,33 @@
     </dependencyManagement>
 
     <dependencies>
+        <!-- Spring AI Alibaba: DashScope starter + agent framework (ReactAgent) -->
         <dependency>
             <groupId>com.alibaba.cloud.ai</groupId>
             <artifactId>spring-ai-alibaba-starter-dashscope</artifactId>
         </dependency>
-
         <dependency>
             <groupId>com.alibaba.cloud.ai</groupId>
             <artifactId>spring-ai-alibaba-agent-framework</artifactId>
         </dependency>
+
+        <!-- JLine 3 — terminal IO, history, completion -->
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
+            <groupId>org.jline</groupId>
+            <artifactId>jline</artifactId>
+            <version>${jline.version}</version>
         </dependency>
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-devtools</artifactId>
-            <scope>runtime</scope>
-            <optional>true</optional>
+            <groupId>org.jline</groupId>
+            <artifactId>jline-terminal-jna</artifactId>
+            <version>${jline.version}</version>
         </dependency>
         <dependency>
-            <groupId>io.milvus</groupId>
-            <artifactId>milvus-sdk-java</artifactId>
-            <version>2.6.10</version>
+            <groupId>org.jline</groupId>
+            <artifactId>jline-reader</artifactId>
+            <version>${jline.version}</version>
         </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-configuration-processor</artifactId>
-            <optional>true</optional>
-        </dependency>
-        <dependency>
-            <groupId>com.google.code.gson</groupId>
-            <artifactId>gson</artifactId>
-            <version>2.10.1</version>
-        </dependency>
-        <!-- 阿里云 DashScope SDK (文本向量化) -->
-        <dependency>
-            <groupId>com.alibaba</groupId>
-            <artifactId>dashscope-sdk-java</artifactId>
-            <version>2.17.0</version>
-            <exclusions>
-                <!-- 排除 slf4j-simple，使用 Spring Boot 默认的 Logback -->
-                <exclusion>
-                    <groupId>org.slf4j</groupId>
-                    <artifactId>slf4j-simple</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-        
+
         <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>
@@ -125,8 +106,8 @@
             <version>1.18.30</version>
             <scope>provided</scope>
         </dependency>
-        
-        <!-- JSON Schema Generator - Spring AI 工具需要 -->
+
+        <!-- JSON Schema Generator — Spring AI tool runtime needs this for @Tool classes (Part 2) -->
         <dependency>
             <groupId>com.github.victools</groupId>
             <artifactId>jsonschema-generator</artifactId>
@@ -137,15 +118,21 @@
             <artifactId>jsonschema-module-jackson</artifactId>
             <version>4.36.0</version>
         </dependency>
-        
-        <!-- Spring AI MCP Client - 使用 WebFlux 版本 -->
-        <!-- 注意：spring-ai-starter-mcp-client-webflux 已经包含了 mcp-annotations，无需单独引入 -->
+
+        <!-- Spring Boot configuration metadata for IDE -->
         <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-mcp-client-webflux</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Test scope: JUnit 5 + AssertJ + Mockito (smoke tests of gateway error brief 渲染) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
-
 
     <build>
         <plugins>
@@ -153,11 +140,10 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
-                    <mainClass>org.example.Main</mainClass>
+                    <mainClass>org.example.cli.Main</mainClass>
                 </configuration>
             </plugin>
-            
-            <!-- Maven 编译器插件，配置 Lombok 注解处理器 -->
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

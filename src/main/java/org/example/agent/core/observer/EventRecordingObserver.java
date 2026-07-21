@@ -7,6 +7,7 @@ import org.example.agent.core.event.FinishEvent;
 import org.example.agent.core.event.LoopBudgetEvent;
 import org.example.agent.core.event.LoopErrorEvent;
 import org.example.agent.core.event.ObservationEvent;
+import org.example.agent.core.event.RollbackEvent;
 import org.example.agent.core.event.ThoughtEvent;
 import org.example.agent.core.event.TokenBudgetEvent;
 import org.example.agent.core.signal.ReActLoopSignal;
@@ -44,6 +45,11 @@ public class EventRecordingObserver implements ReActLoopObserver {
 
     @Override
     public void onObservation(ObservationEvent event, ReActLoopSignal signal) {
+        events.add(event);
+    }
+
+    @Override
+    public void onRollback(RollbackEvent event, ReActLoopSignal signal) {
         events.add(event);
     }
 

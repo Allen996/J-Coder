@@ -6,6 +6,7 @@ import org.example.agent.core.event.FinishEvent;
 import org.example.agent.core.event.LoopBudgetEvent;
 import org.example.agent.core.event.LoopErrorEvent;
 import org.example.agent.core.event.ObservationEvent;
+import org.example.agent.core.event.RollbackEvent;
 import org.example.agent.core.event.ThoughtEvent;
 import org.example.agent.core.event.TokenBudgetEvent;
 import org.example.agent.core.signal.ReActLoopSignal;
@@ -35,6 +36,12 @@ public interface ReActLoopObserver {
     void onLoopBudgetExceeded(LoopBudgetEvent event, ReActLoopSignal signal);
 
     void onTokenBudgetExceeded(TokenBudgetEvent event, ReActLoopSignal signal);
+
+    /**
+     * 副作用回滚事件。v1 默认 no-op,审计 / 可观测实现可选择性 override。
+     */
+    default void onRollback(RollbackEvent event, ReActLoopSignal signal) {
+    }
 
     void onFinish(FinishEvent event, ReActLoopSignal signal);
 

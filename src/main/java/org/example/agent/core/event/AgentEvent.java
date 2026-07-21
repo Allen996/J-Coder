@@ -20,6 +20,7 @@ public sealed interface AgentEvent
                 ActionPreCheckEvent,
                 ActionInvokedEvent,
                 ObservationEvent,
+                RollbackEvent,
                 LoopBudgetEvent,
                 TokenBudgetEvent,
                 FinishEvent,
