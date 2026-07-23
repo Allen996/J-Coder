@@ -1,5 +1,9 @@
 package org.example.agent.core.loop;
 
+import org.example.agent.context.builder.ContextBuilder;
+import org.example.agent.context.compression.ConversationCompressor;
+import org.example.agent.context.project.ProjectContext;
+import org.example.agent.context.project.ProjectContextCache;
 import org.example.agent.core.budget.AgentBudget;
 import org.example.agent.core.event.ThoughtEvent;
 import org.example.agent.core.kind.StepKind;
@@ -72,6 +76,8 @@ public class ReActLoop {
     private final ToolGateway toolGateway;
     private final List<ToolCallback> toolCallbacks;
     private final SideEffectTracker sideEffects;
+    private final ContextBuilder contextBuilder;
+    private final ProjectContextCache projectContextCache;
 
     public ReActLoop(String executionId,
                      ChatModel chatModel,
@@ -80,6 +86,18 @@ public class ReActLoop {
                      ToolGateway toolGateway,
                      List<ToolCallback> toolCallbacks,
                      SideEffectTracker sideEffects) {
+        this(executionId, chatModel, task, budget, toolGateway, toolCallbacks, sideEffects, null, null);
+    }
+
+    public ReActLoop(String executionId,
+                     ChatModel chatModel,
+                     AgentTask task,
+                     AgentBudget budget,
+                     ToolGateway toolGateway,
+                     List<ToolCallback> toolCallbacks,
+                     SideEffectTracker sideEffects,
+                     ContextBuilder contextBuilder,
+                     ProjectContextCache projectContextCache) {
         this.executionId = executionId;
         this.chatModel = chatModel;
         this.task = task;
@@ -88,6 +106,8 @@ public class ReActLoop {
         this.toolGateway = toolGateway;
         this.toolCallbacks = toolCallbacks == null ? List.of() : toolCallbacks;
         this.sideEffects = sideEffects;
+        this.contextBuilder = contextBuilder;
+        this.projectContextCache = projectContextCache;
         log.info("executionId={} ReActLoop initialized with {} tool callbacks: {}",
                 executionId,
                 this.toolCallbacks.size(),
@@ -100,7 +120,7 @@ public class ReActLoop {
     public String getAgentName() { return agentName; }
     public AgentBudget getBudget() { return budget; }
 
-    public record SubscribeResult(List<StepRecord> records, String fullAnswer) {
+    public record SubscribeResult(List<StepRecord> records, String fullAnswer, List<Message> turnMessages) {
     }
 
     public SubscribeResult subscribe(String input,
@@ -112,6 +132,10 @@ public class ReActLoop {
         List<StepRecord> records = Collections.synchronizedList(new ArrayList<>());
         StringBuilder fullAnswer = new StringBuilder();
         List<Message> messages = new ArrayList<>(buildInitialMessages(input));
+        List<Message> turnMessages = new ArrayList<>();
+        if (input != null && !input.isEmpty()) {
+            turnMessages.add(new UserMessage(input));
+        }
 
         // 绑定副作用追踪器到当前 executionId —— FileTools 之后写入文件会在这里登记。
         // 失败路径触发的 rollbackAll() 也读这个 ThreadLocal,所以必须在循环入口 bind,出口 clear。
@@ -122,6 +146,10 @@ public class ReActLoop {
                     log.info("executionId={} signal terminate before iter={}", executionId, iter);
                     break;
                 }
+
+                // 每次 LLM 调用前通知 observer 当前的 prompt（part3.md 可观测增强）
+                int promptStep = stepCounter.get() + 1;
+                emitPromptBuilt(observers, messages, promptStep, signal);
 
                 Prompt prompt = buildPrompt(messages);
                 ChatResponse response = chatModel.call(prompt);
@@ -165,6 +193,7 @@ public class ReActLoop {
                         assistant.hasToolCalls() ? assistant.getToolCalls().size() : 0,
                         text == null ? "<null>" : (text.length() > 200 ? text.substring(0, 200) + "..." : text));
                 if (!assistant.hasToolCalls()) {
+                    turnMessages.add(assistant);
                     if (text != null) {
                         fullAnswer.append(text);
                     }
@@ -173,6 +202,7 @@ public class ReActLoop {
 
                 // 把 AssistantMessage（含 tool_calls）加进历史，模型下一轮能看见自己刚才要调什么
                 messages.add(assistant);
+                turnMessages.add(assistant);
 
                 List<ToolResponseMessage.ToolResponse> toolResponses = new ArrayList<>();
                 for (AssistantMessage.ToolCall tc : assistant.getToolCalls()) {
@@ -185,9 +215,11 @@ public class ReActLoop {
                             tc.id(), tc.name(), result == null ? "" : result));
                 }
                 if (!toolResponses.isEmpty()) {
-                    messages.add(ToolResponseMessage.builder()
+                    ToolResponseMessage toolMessage = ToolResponseMessage.builder()
                             .responses(toolResponses)
-                            .build());
+                            .build();
+                    messages.add(toolMessage);
+                    turnMessages.add(toolMessage);
 
                     // TODO(v2): 上下文窗口压缩 —— 当出现 LOGIC + rollback 时,本轮 (Assistant + ToolResponse)
                     // 已被标记为"已撤销的历史",下一轮 prompt 应当把它折叠成单行摘要,而不是原样塞进 messages。
@@ -205,12 +237,36 @@ public class ReActLoop {
             sideEffects.clear();
         }
 
-        return new SubscribeResult(records, fullAnswer.toString());
+        return new SubscribeResult(
+                records,
+                fullAnswer.toString(),
+                Collections.unmodifiableList(new ArrayList<>(turnMessages)));
     }
 
     // ============== 内部 ==============
 
     private List<Message> buildInitialMessages(String input) {
+        // Part 3 改造：交给 ContextBuilder 三层装配；contextBuilder 为 null 时降级到 Part 1 模板。
+        if (contextBuilder != null) {
+            try {
+                ContextBuilder.BuiltContext built = contextBuilder.build(task, input);
+                log.debug("executionId={} ContextBuilder assembled {} messages (system={} project={} session={}, budget={})",
+                        executionId, built.getMessages().size(),
+                        built.getSystemTokens(), built.getProjectTokens(),
+                        built.getSessionTokens(), built.getSessionReserved());
+                return new ArrayList<>(built.getMessages());
+            } catch (ContextBuilder.ContextOverflowException ex) {
+                // 装配阶段已经超预算 —— 让 ReActLoop 进入下一轮立即被 TokenBudgetObserver 终结。
+                log.warn("executionId={} ContextBuilder overflow at build: used={} reserved={}",
+                        executionId, ex.getUsed(), ex.getReserved());
+                // 仍要返回至少 [system, user] 否则 chatModel.call 会失败
+                List<Message> fallback = new ArrayList<>();
+                fallback.add(new SystemMessage("（上下文超限，无法继续）"));
+                fallback.add(new UserMessage(input));
+                return fallback;
+            }
+        }
+        // ---- 兜底 ----
         List<Message> msgs = new ArrayList<>();
         Map<String, Object> vars = new HashMap<>();
         if (task.getPromptVariables() != null) {
@@ -260,6 +316,17 @@ public class ReActLoop {
     private void emitThought(List<ReActLoopObserver> observers, ThoughtEvent e, ReActLoopSignal s) {
         for (ReActLoopObserver o : observers) {
             try { o.onThought(e, s); } catch (Exception ex) { log.warn("observer onThought failed", ex); }
+        }
+    }
+
+    /** 派发 prompt-build 事件（part3.md 可观测增强），用于 /verbose 实时打印与 /context 当前快照。 */
+    private void emitPromptBuilt(List<ReActLoopObserver> observers, List<Message> messages, int stepIndex, ReActLoopSignal s) {
+        for (ReActLoopObserver o : observers) {
+            try {
+                o.onPromptBuilt(new ArrayList<>(messages), stepIndex);
+            } catch (Exception ex) {
+                log.warn("observer onPromptBuilt failed", ex);
+            }
         }
     }
 

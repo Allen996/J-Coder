@@ -1,75 +1,92 @@
-## 7. 会话持久化
+## 7. 记忆系统
 
-### 7.1 存储
+### 7.1 重新定位
 
-单文件 SQLite：`~/.local-cli-copilot/sessions.db`
+记忆不是"重启恢复对话"，而是让 agent 在不同时间尺度上保留与复用上下文。分三层,全部以 **Markdown 文件**本地存储——便于用户直接检视、编辑、纳入版本管理,不引入 SQL 或任何外部依赖。
 
-- 不依赖外部服务
-- 包含 WAL 模式 + 定期 checkpoint
-- 首次启动时自动建表
+### 7.2 三层架构
 
-### 7.2 Schema
+短期记忆
 
-```sql
-CREATE TABLE session (
-  id              TEXT PRIMARY KEY,
-  title           TEXT,
-  started_at      INTEGER NOT NULL,    -- epoch ms
-  updated_at      INTEGER NOT NULL,
-  model           TEXT,
-  total_tokens_in  INTEGER DEFAULT 0,
-  total_tokens_out INTEGER DEFAULT 0,
-  metadata        TEXT                  -- JSON: project root, auto_approve 等
-);
+- 粒度:单个会话的完整对话流。
+- 内容:不加工的全部 user / assistant / tool-call 原始条目,按时间顺序追加。
+- 形态:每个 session 一份独立 Markdown 文件。
+- 容量与滑窗:设定大小上限(token 数或条目数)。超出时按 part3 §6.6 的三步压缩顺序处理——先对历史 tool 响应做占位符替换(只保留最近 3 次),再清空 ephemeral,最后滑窗淘汰最早条目进入中期记忆素材队列。被淘汰与被替换的条目不丢失,磁盘文件保留原始记录。
+- 消费:ContextBuilder 装配 prompt 时读滑窗内的内容。
+- 写入时机:每条消息或工具调用产生时增量追加。
+- 生命周期:session 显式结束时冻结文件。
 
-CREATE TABLE message (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id      TEXT NOT NULL,
-  role            TEXT NOT NULL,         -- user/assistant/system/tool
-  content         TEXT,
-  tool_call_id    TEXT,                  -- tool result 时关联
-  tool_calls      TEXT,                  -- JSON array，assistant 调用工具时
-  tool_name       TEXT,                  -- tool result 时记录
-  created_at      INTEGER NOT NULL,
-  FOREIGN KEY (session_id) REFERENCES session(id)
-);
+中期记忆
 
-CREATE INDEX idx_message_session ON message(session_id, id);
+- 粒度:单个会话的摘要脉络。
+- 来源:短期记忆滑窗溢出的旧条目 + 每次会话结束后的整体重述。
+- 形态:每个 session 一份独立 Markdown 文件,结构包含会话目标、已完成事项、关键决策、教训、后续待办。
+- 生成方式:使用轻量 LLM(如 flash 级别)做快速总结,保证低延迟低成本。
+- 更新时机:
+  - 滑窗溢出时增量压缩为片段追加进中期记忆
+  - 每次会话结束触发一次整体重述,以最新摘要更新
+- 会话结束的判定:默认连续 10 分钟无用户交互即视为会话结束;不另设独立定时器函数,在用户输入或 LLM 调用间隙顺带检查,默认阈值可配置。
+- 消费:`--resume` 启动时读入 SessionMessageStore;新会话开始时按主题相关性检索注入。
 
-CREATE TABLE tool_invocation (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id      TEXT NOT NULL,
-  message_id      INTEGER,
-  tool_name       TEXT NOT NULL,
-  args            TEXT,                  -- JSON
-  result_redacted TEXT,                  -- 截断/脱敏
-  status          TEXT,                  -- ok/denied/timeout/error
-  duration_ms     INTEGER,
-  authorized      INTEGER,               -- 0/1
-  error           TEXT,
-  created_at      INTEGER NOT NULL
-);
+长期记忆
 
-CREATE INDEX idx_tool_session ON tool_invocation(session_id);
-```
+- 粒度:单个项目。
+- 内容:项目的技术要求、目的、架构约定、关键决策、代码风格、依赖清单等"项目骨架信息"。
+- 形态:项目目录下唯一的一份 Markdown 文件。
+- 写入时机:仅在显式触发——用户明确指示"记下来"、agent 完成重要里程碑后提议确认、用户手工编辑。
+- 消费:ContextBuilder 在 system 层注入。
+- 更新策略:追加式更新;旧条目可标注 deprecated 但不删除;支持用户用编辑器直接维护。
 
-### 7.3 会话恢复
+### 7.3 三层之间的桥梁
 
-启动参数：
-- `agent` — 新建会话
-- `agent --resume <id>` — 恢复指定会话
-- `agent --resume` — 交互式选择（`/resume` 命令也行）
-- `agent --list-sessions` — 列出最近 20 个会话
+短期 → 中期
 
-恢复时：
-1. 加载 session 元数据
-2. 按需加载 message 历史（懒加载，避免一次拉全）
-3. 重建 ProjectContext（项目根可能已经变了，重新扫描）
+- 滑窗溢出时,被淘汰的旧条目由轻量 LLM 增量压缩成片段追加进中期记忆
+- 会话结束时触发整体重述,以最新摘要整体更新中期记忆
 
-### 7.4 导出 / 重放
+中期 → 长期
 
-- `/export <path>` → 导出当前会话为 JSONL（每行一条 message + tool 调用）
-- `--replay <path>` → 重放一个导出的会话（用于调试 prompt 改动）
-- 导出会自动脱敏：token、密码、密钥全部替换为 `<REDACTED>`
+- 不自动晋升。中期记忆中可由用户或 agent 标记"应迁入项目骨架"的条目,在下次维护时由人或 agent 迁入长期记忆文件。
 
----
+冲突解决
+
+- 同一事实跨层出现:长期 > 中期 > 短期
+- 同层多版本:保留全部并附时间戳,运行时取最新
+
+### 7.4 文件组织
+
+长期记忆:项目目录下唯一一份 Markdown 文件,文件名 `Nico.md`。
+
+短期与中期:每个 session 各一份独立 Markdown 文件,统一存放于项目级 `.agent/sessions/{sessionId}/{short|mid}-term.md`,与项目代码一起纳入版本管理。
+
+每份文件头部以 YAML frontmatter 记录元信息:schema 版本、创建时间、sessionId、所属项目。
+
+### 7.5 一致性与原子性
+
+- 写入采用"写临时文件 + rename"模式,杜绝半写损坏
+- Markdown 追加天然适合原子 rename;短期实时追加可用 append-only + rotate
+- 启动时扫描磁盘重建内存索引;解析失败自动备份为损坏文件并跳过,不影响其他文件
+- 长期记忆的每次修改追加到独立 changelog,用于审计与回滚
+- 短期记忆的实时事件在每步完成时同步落盘,避免进程崩溃丢失
+
+### 7.6 与现有组件的衔接
+
+- 短期:ContextBuilder 装配 prompt 时直接消费滑窗内的条目
+- 中期:`--resume` 时读入 SessionMessageStore;新会话开始按主题检索历史注入
+- 长期:ContextBuilder 的 system 层注入
+- 总结:遵循 part3 §6.6 的三步压缩顺序;第三步(滑窗淘汰后批量 LLM 摘要)使用轻量 LLM(flash 级别),追加进 mid_term
+- 现有 `ToolResult.status + errorCode` 结构化错误链作为短期观察事件来源;连续失败或同类错误可触发"教训型"中期片段追加
+
+### 7.7 可配置项
+
+- 短期记忆滑窗上限(按 token 数或条目数)
+- 中期记忆使用的 LLM 级别(flash / mini 等)
+- 中期记忆保留时长
+- 会话结束的空闲超时阈值(默认 10 分钟)
+
+### 7.8 与原方案的差异
+
+- 放弃 SQLite 与 JSON,全部使用 Markdown——便于人工检视、编辑器维护、`git diff`
+- 短期记忆从"按需持久化"转为"全量追加 + 滑窗"——保证原始信息不丢
+- 中期记忆从抽象定义明确为"每次会话结束后整体重述 + 滑窗溢出增量片段"
+- 长期记忆从"用户/项目/全局三档"简化为"项目唯一文件",由用户主导维护

@@ -2,6 +2,9 @@ package org.example.agent.core.provider;
 
 import com.alibaba.cloud.ai.graph.agent.Builder;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import org.example.agent.context.builder.ContextBuilder;
+import org.example.agent.context.project.ProjectContext;
+import org.example.agent.context.project.ProjectContextCache;
 import org.example.agent.core.runtime.ReactAgentProvider;
 import org.example.agent.core.task.AgentTask;
 import org.springframework.beans.factory.ObjectProvider;
@@ -18,18 +21,15 @@ import java.util.Map;
 /**
  * 一个最简的 ReactAgentProvider：把 AgentTask 字段直接拼成 ReactAgent.builder() 调用。
  *
- * 适用 4.1 阶段（Prompt Registry 还没有），把所有模型 / 工具 / 提示词参数放在这里：
- *  - 模型：留空由 Spring AI Alibaba 自动注入
- *  - 工具：通过 Spring 上下文收集 ToolCallbackProvider / MethodTools
- *  - 提示词：使用 AgentTask.promptVariables 拼一段简易系统提示
+ * <p>Part 3 改造：把 system prompt 的渲染交给 {@link ContextBuilder}（part3.md §6.4 步骤 1+3），
+ * 旧版散装的"通用助手"模板被三层上下文装配器取代。
  *
- * Part 1 修改说明：
- *  - 早期版本用 @Autowired Object[] methodTools 会把容器里所有 bean 都吸进来，
- *    包括 CliRenderer 这类非工具 bean，造成循环依赖。
- *  - 改为 ObjectProvider + 反射过滤（只接受包含 @Tool 方法的对象），Part 2 会扩展。
- *  - Part 1 阶段没有任何 @Tool 类，methodTools 始终为空数组；toolCallbackProvider 也暂未注入。
- *
- * 业务方不需要直接实现 Provider，只需按需覆盖 provider 即可（参见 guide 5 章）。
+ * <p>关键点：
+ * <ul>
+ *   <li>System Layer 的内容（角色描述 + 时间 + 模型 + 项目根 + CLAUDE.md）由 ContextBuilder.renderSystem 生成。</li>
+ *   <li>Project Layer 的内容（文件树 + README + 关键配置）由 ContextBuilder.renderProject 生成，作为第二条 system message 注入。</li>
+ *   <li>工具列表（tool schema）由 Spring AI 的 ToolCallback 自动并入 —— 与 Provider 解耦。</li>
+ * </ul>
  */
 @Component
 public class SpringAiReactAgentProvider implements ReactAgentProvider {
@@ -37,14 +37,21 @@ public class SpringAiReactAgentProvider implements ReactAgentProvider {
     private final ObjectProvider<Object> beanProvider;
     private final ObjectProvider<ToolCallbackProvider> toolCallbackProvider;
     private final ChatModel chatModel;
+    private final ContextBuilder contextBuilder;
+    private final ProjectContextCache projectContextCache;
 
+    @Autowired
     public SpringAiReactAgentProvider(
             ObjectProvider<Object> beanProvider,
             ObjectProvider<ToolCallbackProvider> toolCallbackProvider,
-            ChatModel chatModel) {
+            ChatModel chatModel,
+            ContextBuilder contextBuilder,
+            ProjectContextCache projectContextCache) {
         this.beanProvider = beanProvider;
         this.toolCallbackProvider = toolCallbackProvider;
         this.chatModel = chatModel;
+        this.contextBuilder = contextBuilder;
+        this.projectContextCache = projectContextCache;
     }
 
     @Override
@@ -57,10 +64,24 @@ public class SpringAiReactAgentProvider implements ReactAgentProvider {
         if (task.getSessionId() != null) vars.put("sessionId", task.getSessionId());
         if (task.getRole() != null) vars.put("role", task.getRole());
 
+        // 三层上下文装配：System + Project + Session
+        ProjectContext project = projectContextCache == null ? null : projectContextCache.current();
+        String systemPrompt = contextBuilder == null
+                ? legacySystemPrompt(task, vars)
+                : contextBuilder.renderSystem(task, project);
+        String projectPrompt = contextBuilder == null
+                ? ""
+                : contextBuilder.renderProject(project);
+
+        String fullSystemPrompt = systemPrompt;
+        if (projectPrompt != null && !projectPrompt.isEmpty()) {
+            fullSystemPrompt = systemPrompt + "\n\n" + projectPrompt;
+        }
+
         Builder b = ReactAgent.builder()
                 .model(this.chatModel)
                 .name(safeName(task.getRole(), "intelligent_assistant"))
-                .systemPrompt(buildSystemPrompt(task, vars));
+                .systemPrompt(fullSystemPrompt);
 
         Object[] methodTools = collectToolObjects();
         if (methodTools.length > 0) {
@@ -102,7 +123,8 @@ public class SpringAiReactAgentProvider implements ReactAgentProvider {
         return tools.toArray();
     }
 
-    private String buildSystemPrompt(AgentTask task, Map<String, Object> vars) {
+    /** Part 1 时代的兜底 system prompt（保留以便测试 / 非 Spring 上下文场景）。 */
+    private String legacySystemPrompt(AgentTask task, Map<String, Object> vars) {
         StringBuilder sb = new StringBuilder();
         sb.append("你是一个专业的智能助手，能调用工具回答用户问题。\n");
         sb.append("当前任务上下文：\n");

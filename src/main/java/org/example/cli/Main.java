@@ -22,7 +22,8 @@ import org.springframework.context.ConfigurableApplicationContext;
 @SpringBootApplication(scanBasePackages = {
         "org.example.cli",
         "org.example.agent.core",
-        "org.example.agent.tool"
+        "org.example.agent.tool",
+        "org.example.agent.context"
 })
 public class Main {
 

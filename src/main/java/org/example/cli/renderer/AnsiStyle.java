@@ -35,6 +35,7 @@ public final class AnsiStyle {
     private static final String FG_WHITE = "[37m";
     private static final String FG_GREEN = "[32m";
     private static final String FG_RED = "[31m";
+    private static final String FG_CYAN = "[36m";
 
     /** 灰色 + dim —— ThoughtEvent */
     public static final String GRAY_DIM = FG_GRAY + DIM;
@@ -50,6 +51,8 @@ public final class AnsiStyle {
     public static final String RED_BOLD = FG_RED + BOLD;
     /** 黄色 + bold —— 用户授权提示 */
     public static final String YELLOW_BOLD_HIGHLIGHT = FG_YELLOW + BOLD;
+    /** 青色 + bold —— prompt dump 段头 */
+    public static final String CYAN_BOLD = FG_CYAN + BOLD;
 
     /**
      * 用 ANSI 样式包裹文本，自动追加 RESET。

@@ -1,6 +1,11 @@
 package org.example.agent.core.impl;
 
 import lombok.extern.slf4j.Slf4j;
+import org.example.agent.context.budget.ContextAwareAgentBudgetFactory;
+import org.example.agent.context.builder.ContextBuilder;
+import org.example.agent.context.compression.AutoCompressionObserver;
+import org.example.agent.context.project.ProjectContextCache;
+import org.example.agent.context.session.SessionMessageStore;
 import org.example.agent.core.budget.AgentBudget;
 import org.example.agent.core.event.AgentEvent;
 import org.example.agent.core.event.FinishEvent;
@@ -24,6 +29,7 @@ import org.example.agent.core.signal.DefaultReActLoopSignal;
 import org.example.agent.core.task.AgentTask;
 import org.example.agent.tool.gateway.ToolGateway;
 import org.example.agent.tool.rollback.SideEffectTracker;
+import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
@@ -67,24 +73,46 @@ public class AgentRuntimeImpl implements AgentRuntime {
     private final ExecutionRegistry registry;
     private final List<ReActLoopObserver> observers = new CopyOnWriteArrayList<>();
     private final ExecutorService blockingExecutor;
+    private final ContextBuilder contextBuilder;
+    private final ProjectContextCache projectContextCache;
+    private final AutoCompressionObserver autoCompressionObserver;
+    private final SessionMessageStore sessionStore;
+    private final ContextAwareAgentBudgetFactory budgetFactory;
 
     @Autowired
     public AgentRuntimeImpl(ChatModel chatModel,
                             ToolGateway toolGateway,
                             ObjectProvider<ToolCallbackProvider> toolCallbackProvider,
-                            SideEffectTracker sideEffectTracker) {
-        this(chatModel, toolGateway, toolCallbackProvider, sideEffectTracker, defaultBlockingExecutor());
+                            SideEffectTracker sideEffectTracker,
+                            ContextBuilder contextBuilder,
+                            ProjectContextCache projectContextCache,
+                            AutoCompressionObserver autoCompressionObserver,
+                            SessionMessageStore sessionStore,
+                            ContextAwareAgentBudgetFactory budgetFactory) {
+        this(chatModel, toolGateway, toolCallbackProvider, sideEffectTracker,
+                contextBuilder, projectContextCache, autoCompressionObserver, sessionStore,
+                budgetFactory, defaultBlockingExecutor());
     }
 
     public AgentRuntimeImpl(ChatModel chatModel,
                             ToolGateway toolGateway,
                             ObjectProvider<ToolCallbackProvider> toolCallbackProvider,
                             SideEffectTracker sideEffectTracker,
+                            ContextBuilder contextBuilder,
+                            ProjectContextCache projectContextCache,
+                            AutoCompressionObserver autoCompressionObserver,
+                            SessionMessageStore sessionStore,
+                            ContextAwareAgentBudgetFactory budgetFactory,
                             ExecutorService blockingExecutor) {
         this.chatModel = chatModel;
         this.toolGateway = toolGateway;
         this.toolCallbackProvider = toolCallbackProvider.getIfAvailable();
         this.sideEffectTracker = sideEffectTracker;
+        this.contextBuilder = contextBuilder;
+        this.projectContextCache = projectContextCache;
+        this.autoCompressionObserver = autoCompressionObserver;
+        this.sessionStore = sessionStore;
+        this.budgetFactory = budgetFactory;
         this.registry = new ExecutionRegistry();
         this.blockingExecutor = blockingExecutor;
     }
@@ -111,6 +139,7 @@ public class AgentRuntimeImpl implements AgentRuntime {
         try {
             ReActLoop.SubscribeResult sr = ctx.reactLoop.subscribe(task.getInput(), java.util.Map.of(), ctx.observers, ctx.signal);
             ctx.fullAnswer = sr.fullAnswer();
+            persistTurn(task.getSessionId(), sr.turnMessages());
             return finalize(ctx, null);
         } catch (RuntimeException ex) {
             return finalize(ctx, ex);
@@ -143,6 +172,7 @@ public class AgentRuntimeImpl implements AgentRuntime {
                 try {
                     ReActLoop.SubscribeResult sr = ctx.reactLoop.subscribe(task.getInput(), java.util.Map.of(), ctx.observers, ctx.signal);
                     ctx.fullAnswer = sr.fullAnswer();
+                    persistTurn(task.getSessionId(), sr.turnMessages());
                     AgentExecutionResult result = finalize(ctx, null);
                     // bridge 已经在 finalize 的 onFinish dispatch 中 emit 过 FinishEvent
                     handle.markDone(result.getReason().name());
@@ -187,9 +217,27 @@ public class AgentRuntimeImpl implements AgentRuntime {
 
     // ==================== 内部流程 ====================
 
+    private void persistTurn(String sessionId, List<Message> turnMessages) {
+        if (sessionStore == null || turnMessages == null || turnMessages.isEmpty()) {
+            return;
+        }
+        try {
+            sessionStore.getOrCreate(sessionId).addAll(turnMessages);
+        } catch (RuntimeException ex) {
+            log.warn("Failed to persist completed turn for session {}: {}", sessionId, ex.getMessage(), ex);
+        }
+    }
+
     private ExecutionContext prepare(AgentTask task) {
         String executionId = "exec-" + UUID.randomUUID();
-        AgentBudget budget = task.getBudget() == null ? AgentBudget.defaultChat() : task.getBudget();
+        AgentBudget budget;
+        if (task.getBudget() != null) {
+            budget = task.getBudget();
+        } else if (budgetFactory != null) {
+            budget = budgetFactory.defaultBudget();
+        } else {
+            budget = AgentBudget.defaultChat();
+        }
 
         EventRecordingObserver recorder = new EventRecordingObserver();
         TokenBudgetObserver tokenObs = new TokenBudgetObserver(budget);
@@ -202,10 +250,13 @@ public class AgentRuntimeImpl implements AgentRuntime {
         chain.add(tokenObs);
         chain.add(stepObs);
         chain.add(timeoutObs);
+        if (autoCompressionObserver != null) {
+            chain.add(autoCompressionObserver);
+        }
 
         DefaultReActLoopSignal signal = new DefaultReActLoopSignal();
         ReActLoop loop = new ReActLoop(executionId, chatModel, task, budget, toolGateway,
-                currentToolCallbacks(), sideEffectTracker);
+                currentToolCallbacks(), sideEffectTracker, contextBuilder, projectContextCache);
         AgentExecutionRecord.Builder recordBuilder = AgentExecutionRecord.builder()
                 .executionId(executionId)
                 .task(task)

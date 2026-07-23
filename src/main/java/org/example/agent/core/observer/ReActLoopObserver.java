@@ -10,6 +10,9 @@ import org.example.agent.core.event.RollbackEvent;
 import org.example.agent.core.event.ThoughtEvent;
 import org.example.agent.core.event.TokenBudgetEvent;
 import org.example.agent.core.signal.ReActLoopSignal;
+import org.springframework.ai.chat.messages.Message;
+
+import java.util.List;
 
 /**
  * ReAct 循环的事件订阅接口。
@@ -46,4 +49,16 @@ public interface ReActLoopObserver {
     void onFinish(FinishEvent event, ReActLoopSignal signal);
 
     void onError(LoopErrorEvent event, ReActLoopSignal signal);
+
+    /**
+     * 每次 chatModel.call() 前触发（part3.md 可观测增强）。
+     *
+     * <p>ReActLoop 在组装完消息列表、调用 LLM 之前同步分发本事件；实现者拿到的是
+     * 当前 step 即将发出的完整 prompt（含 system + project + session + 本 step 的
+     * assistant/tool 消息）。
+     *
+     * <p>默认 no-op —— 不感兴趣的 observer 不需要实现。
+     */
+    default void onPromptBuilt(List<Message> messages, int stepIndex) {
+    }
 }
