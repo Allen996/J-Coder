@@ -11,6 +11,7 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
@@ -38,8 +39,15 @@ public class ChatModelSummarizer implements ConversationCompressor.SummarizerCha
     private final ChatModel chatModel;
 
     @Autowired
-    public ChatModelSummarizer(ChatModel chatModel) {
-        this.chatModel = chatModel;
+    public ChatModelSummarizer(ApplicationContext ctx) {
+        ChatModel resolved = null;
+        try {
+            resolved = ctx.getBean("memoryChatModel", ChatModel.class);
+        } catch (Exception ignore) { }
+        this.chatModel = resolved;
+        if (this.chatModel == null) {
+            log.info("ChatModelSummarizer: no memoryChatModel bean available, will fall back to heuristic summary");
+        }
     }
 
     @Override

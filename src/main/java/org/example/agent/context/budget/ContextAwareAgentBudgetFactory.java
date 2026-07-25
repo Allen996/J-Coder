@@ -4,7 +4,7 @@ import org.example.agent.core.budget.AgentBudget;
 import org.springframework.stereotype.Component;
 
 /**
- * 桥接 {@link ContextBudgetPolicy} 与 {@link AgentBudget}（part3.md §6.4 "复用现有 AgentBudget"）。
+ * 桥接 {@link ContextBudgetPolicy} 与 {@link AgentBudget}（part3.md §6.5）。
  *
  * <p>当 AgentTask 没有显式提供 budget 时，Runtime 用本工厂生成一个与 ContextBudgetPolicy
  * 对齐的默认 budget —— 确保 TokenBudgetObserver 能正确识别「per-call prompt 超窗口」。

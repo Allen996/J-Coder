@@ -13,7 +13,7 @@
 │ ───────────────────separator────────────────────│
 │ Dynamic Layer（运行时累积）                       │
 │   - 字典结构:多个独立 key                        │
-│   - messages / mid_term / long_term / ephemeral │
+│   - messages / mid_term / long_term / memory_index / ephemeral │
 │   大小:剩余预算                                  │
 └─────────────────────────────────────────────────┘
 ```
@@ -37,19 +37,21 @@
 
 承载运行时累积的内容,按 key 组织:
 
-- `messages`:短期记忆原始流,user / assistant / tool-call 全量记录,带滑窗。每次 tool 调用完成后同步写盘(user 输入与最终 assistant 回复在产生时同步写盘);Markdown 文件每条 message 一个段,含 role + 时间戳 + content,tool_call 与 tool_response 同段或邻段配对。
-- `mid_term`:中期记忆,per-session LLM 摘要。滑窗淘汰积攒到阈值后触发批量 LLM 摘要;会话结束触发整体重述。
-- `long_term`:长期记忆,主要记录项目红线(禁止事项)与编程风格约定。由用户显式"记住"等指令触发写入,正常情况极少超出。
-- `ephemeral`:临时观察事件流(thought / action / observation),step 结束清理。单 step 内 2K token 硬上限,超额截断最旧观察。
+- `messages`:短期记忆原始流,user / assistant / tool-call 全量记录。Markdown 文件每条 message 一个段,含 role + 时间戳 + content;tool_call 与 tool_response **邻段配对**,共享同一 `message_id`;文件头部 YAML frontmatter 记录 schema 版本、sessionId、创建时间等元数据。**加载语义**:默认取最近 5 轮对话直接加入上下文;超预算则递减轮数(4→3→2→1);1 轮仍超则对该轮做 LLM 摘要压缩。不再使用滑窗淘汰。
+- `mid_term`:中期记忆,**Session 整体总结**,由轻量级 LLM 在会话结束时生成,固定结构包含会话目标、已完成事项、关键决策、教训、后续待办。
+- `long_term`:长期记忆,记录项目红线与编程风格约定,落盘为 `Nico.md`。由轻量级 LLM 在每轮对话结束后从对话中提取候选条目,经用户确认后写入。
+- `memory_index`:记忆索引,即 `MEMORY.md` 内容,**常驻动态层但压缩阶段不被处理**。LRU 保留最近 20 个记忆条目,过期文件不删除(仅从索引移除)。
+- `ephemeral`:临时观察事件流(thought / action / observation),每个 step 重建清理。单 step 内 2K token 硬上限,超额截断最旧观察。
 
 加载时机:
 
-- `messages`:每次 tool 调用完成(或 user 输入 / 最终 assistant 回复产生)时同步落盘
-- `mid_term`:session 开始或 `--resume` 时读入
-- `long_term`:session 开始时全量加载或按相关性检索注入(由配置决定)
+- `messages`:ContextBuilder 装配时按"最近 5 轮递减"加载
+- `mid_term`:由 `memory_index` 索引按相关性隐式匹配加载,默认返回最相关 5 条
+- `long_term`:session 开始时从 `Nico.md` 全量加载进 prompt
+- `memory_index`:session 开始时加载;记忆文件产生时同步更新;不存在时无需加载
 - `ephemeral`:当前 step 写入,step 结束清理
 
-修改策略:每个 key 完全独立——刷新 `long_term` 不触发 `messages` 的滑窗重算,更新 `mid_term` 不影响 `ephemeral` 的临时观察。
+修改策略:每个 key 完全独立——`memory_index` 永不压缩;`mid_term` 重新生成会整体替换;`long_term` 仅在用户确认候选条目后追加。
 
 ### 6.4 分隔符
 
@@ -72,25 +74,21 @@
 
 动态层内部按 key 分配软配额:
 
-- `messages`:主体预算,带滑窗,超额触发压缩
-- `mid_term`:固定小配额(默认 1K),超限触发 key 自身重写
+- `messages`:由"最近 5 轮递减 + 单轮 LLM 压缩"控制,不设硬配额
+- `mid_term`:固定小配额(默认 1K),超限触发整体重新生成
 - `long_term`:固定小配额(默认 2K),超限触发按重要性重排
+- `memory_index`:常驻,小配额(默认 0.5K,LRU 20 项),不被压缩
 - `ephemeral`:不计入长期预算,每 step 重建;单 step 内 2K 硬上限,超额截断最旧观察
-
-每个 key 独立跟踪 token 用量,改一个 key 不重算其他 key 的占用。
 
 ### 6.6 压缩策略
 
-**静态层永不压缩**;压缩只针对动态层。按以下顺序分三步执行,每步独立判断是否触发:
+**静态层永不压缩**;`memory_index` 在压缩阶段不被处理。压缩只针对动态层其他 key:
 
-1. **历史工具结果占位**——只保留最近 3 次 tool 调用的完整响应,更早的工具响应替换为占位符(如 `[tool result truncated, see mid-term]`)。assistant 消息中的 `tool_calls` 字段保留不动,仅替换对应 `ToolResponseMessage` 的响应内容。
-2. **清空 ephemeral**——丢弃当前 step 的全部临时观察事件。
-3. **压缩 messages**——滑窗淘汰最早条目进入待摘要队列;队列达到阈值后批量调用 LLM 摘要,结果追加进 `mid_term`。
+1. **短期记忆加载压缩**——加载 messages 时默认取最近 5 轮;超预算则递减轮数(4→3→2→1);1 轮仍超则对该轮做 LLM 摘要压缩。
+2. **清空 ephemeral**——每个 step 结束时丢弃全部临时观察事件,下个 step 重建。
 
-`mid_term` 超额 → 触发"教训型片段"合并或重新生成。
+`mid_term` 超额 → 触发整体重新生成(由轻量级 LLM 重新总结 session)。
 `long_term` 超额 → 按重要性重排,旧条目可标 deprecated 但不删除。
-
-每步独立判断是否执行,不必三步全跑;前一步未触发不阻塞后一步执行。
 
 ### 6.7 项目结构读取
 
@@ -102,13 +100,16 @@
 
 三层记忆全部以 key 形式承载在动态层:
 
-| 记忆层 | 动态层 key | 落盘位置 |
-|---|---|---|
-| 短期 | `messages` | `.agent/sessions/{sessionId}/short-term.md` |
-| 中期 | `mid_term` | `.agent/sessions/{sessionId}/mid-term.md` |
-| 长期 | `long_term` | `Nico.md`(项目根) |
+| 记忆层 | 动态层 key | 落盘位置 | 文件格式 |
+|---|---|---|---|
+| 短期 | `messages` | `.agent/sessions/{sessionId}/short-term.md` | MD + YAML frontmatter |
+| 中期 | `mid_term` | `.agent/sessions/{sessionId}/mid-term.md` | MD + YAML frontmatter |
+| 长期 | `long_term` | `Nico.md`(项目根) | MD + YAML frontmatter |
+| 索引 | `memory_index` | `MEMORY.md`(项目根) | MD + YAML frontmatter |
 
-短期记忆(`messages` key)的同步写盘由 ContextBuilder 在每轮追加后触发,不再依赖内存中的临时缓冲兜底。session 重启时按 key 独立从磁盘恢复。
+`MEMORY.md` 常驻动态层:`memory_index` key 在压缩阶段不被处理。每行格式为 `<记忆文件路径> - <简介>`,LRU 保留最近 20 个记忆条目,过期文件不删除(仅从索引移除)。模型通过索引按相关性请求加载具体记忆文件——由 ContextBuilder 隐式调用小模型智能匹配最相关 5 条记忆,匹配失败降级为关键词匹配。
+
+短期记忆的加载不再使用滑窗,改为"最近 5 轮递减 + 单轮 LLM 压缩"。占位符与同步落盘相关机制不再适用。session 重启时按 key 独立从磁盘恢复。
 
 ### 6.9 与原方案的差异
 
@@ -117,3 +118,6 @@
 - 每层从"扁平文本段"改为"字典式多 key",每个 key 独立可改
 - 静态层不再承载项目约定,改为由动态层 `long_term` key 加载
 - 记忆系统(part4)与上下文工程(part3)通过 key 名称对齐,无重复定义
+- 上下文不再使用滑窗淘汰,改用"最近 5 轮递减 + LLM 单轮压缩"
+- 记忆文件统一改用 Markdown 格式存储,YAML frontmatter 记录元数据
+- `MEMORY.md` 进入动态层作为 `memory_index` key,但不被压缩处理

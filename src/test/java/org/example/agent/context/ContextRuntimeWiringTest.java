@@ -3,9 +3,12 @@ package org.example.agent.context;
 import org.example.agent.context.budget.ContextBudgetPolicy;
 import org.example.agent.context.builder.ContextBuilder;
 import org.example.agent.context.compression.ConversationCompressor;
+import org.example.agent.context.layer.DynamicLayer;
+import org.example.agent.context.layer.StaticLayer;
+import org.example.agent.context.memory.LongTermStore;
+import org.example.agent.context.memory.MemoryIndex;
+import org.example.agent.context.memory.MidTermStore;
 import org.example.agent.context.observability.PromptDumpObserver;
-import org.example.agent.context.project.ProjectContextCache;
-import org.example.agent.context.project.ProjectScanner;
 import org.example.agent.context.session.SessionMessageStore;
 import org.example.agent.core.event.AgentEvent;
 import org.example.agent.core.event.FinishEvent;
@@ -18,7 +21,6 @@ import org.example.cli.command.impl.ContextCommand;
 import org.example.cli.session.SessionState;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -54,18 +56,24 @@ class ContextRuntimeWiringTest {
     }
 
     @Test
-    void persistsCompletedTurnsAndCapturesThePromptSentToTheModel(@TempDir Path tempDir) {
+    void persistsCompletedTurnsAndRendersTwoLayerDictionaryOverview() {
         CapturingChatModel chatModel = new CapturingChatModel(
                 response("assistant-one"), response("assistant-two"));
 
         SessionMessageStore sessionStore = new SessionMessageStore();
         SessionState cliSession = new SessionState();
         String sessionId = cliSession.getSessionId();
+        StaticLayer staticLayer = new StaticLayer();
+        DynamicLayer dynamicLayer = new DynamicLayer();
         ContextBuilder contextBuilder = new ContextBuilder(
                 ContextBudgetPolicy.defaultPolicy(),
                 sessionStore,
-                () -> null,
-                new ConversationCompressor());
+                new ConversationCompressor(),
+                staticLayer,
+                dynamicLayer,
+                new MidTermStore(),
+                new LongTermStore(),
+                new MemoryIndex());
         SideEffectTracker sideEffectTracker = new NoOpSideEffectTracker();
         ObjectProvider<ToolCallbackProvider> toolProvider =
                 new StaticListableBeanFactory().getBeanProvider(ToolCallbackProvider.class);
@@ -77,7 +85,6 @@ class ContextRuntimeWiringTest {
                 toolProvider,
                 sideEffectTracker,
                 contextBuilder,
-                null,
                 null,
                 sessionStore,
                 null,
@@ -112,32 +119,42 @@ class ContextRuntimeWiringTest {
         List<String> secondPromptTexts = messageTexts(secondPrompt);
 
         assertThat(secondPromptTexts)
-                .containsSubsequence("first-question", "assistant-one", "second-question");
+                .containsSubsequence("second-question");
         assertThat(secondPrompt.stream()
                 .filter(UserMessage.class::isInstance)
                 .map(SessionMessageStore::extractText)
                 .filter("second-question"::equals))
                 .hasSize(1);
+        // 短期记忆以单段 messages 渲染，旧「每条 message 独立子段」已合并。
+        // 验证历史确实在 prompts 中可见（不在 user message 里也能被模型看到）。
+        String allText = String.join(" ", secondPromptTexts);
+        assertThat(allText).contains("first-question").contains("assistant-one");
 
         PromptDumpObserver.Snapshot latest = promptObserver.latestSnapshot();
         assertThat(latest).isNotNull();
         assertThat(latest.getMessages()).containsExactlyElementsOf(secondPrompt);
 
-        ProjectContextCache projectCache = new ProjectContextCache(new ProjectScanner(), tempDir.toString());
         ContextCommand contextCommand = new ContextCommand(
                 contextBuilder,
                 ContextBudgetPolicy.defaultPolicy(),
+                staticLayer,
+                dynamicLayer,
                 sessionStore,
-                projectCache,
                 promptObserver);
         StringWriter output = new StringWriter();
         contextCommand.execute(
                 "--full",
-                new CliContext(runtime, cliSession, new PrintWriter(output, true), tempDir, null));
+                new CliContext(runtime, cliSession, new PrintWriter(output, true), Path.of("."), null));
 
-        assertThat(output.toString())
-                .contains("=== 3-LAYER OVERVIEW ===")
-                .contains("=== LAST LLM PROMPT")
+        String out = output.toString();
+        assertThat(out)
+                .contains("=== 2-LAYER DICTIONARY OVERVIEW ===")
+                .contains("Static Layer")
+                .contains("Dynamic Layer")
+                .contains("role_definition")
+                .contains("messages")
+                .contains("memory_index")
+                .contains("long_term")
                 .contains("first-question", "assistant-one", "second-question")
                 .doesNotContain("no LLM prompt captured yet");
     }

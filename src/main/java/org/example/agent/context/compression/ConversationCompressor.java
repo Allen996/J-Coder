@@ -2,6 +2,7 @@ package org.example.agent.context.compression;
 
 import lombok.extern.slf4j.Slf4j;
 import org.example.agent.context.budget.ContextBudgetPolicy;
+import org.example.agent.context.builder.ContextBuilder;
 import org.example.agent.context.session.SessionMessageStore;
 import org.example.agent.core.observer.ContextCompressionHook;
 import org.example.agent.core.task.AgentTask;
@@ -16,37 +17,34 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 会话压缩器（part3.md §6.5）。
+ * 会话压缩器（part3.md §6.6 压缩策略 §1）。
  *
- * <p>压缩算法（与 part3.md §6.5 文字对齐）：
+ * <p>新算法（替换原"最近 K 轮 + 摘要"滑窗）：
  * <ol>
- *   <li>保留最近 K=5 轮原文（user + assistant + tool 完整记录）。</li>
- *   <li>剩余历史扔给一个独立的"压缩 Agent"（system: "你是会话摘要器"）。</li>
- *   <li>摘要模板：用户的核心目标 / 已经做了哪些事、得到了什么结论 / 待解决的问题 / 关键引用（文件路径、命令、错误信息）。</li>
- *   <li>摘要上限 1500 tokens。</li>
- *   <li>替换历史为单个 system message："以下是早期对话摘要：..."。</li>
+ *   <li>取最近 5 轮 = 5 user + 5 assistant 完整记录（含 tool_call / tool_response）。</li>
+ *   <li>若总 token 仍超 dynamicReserved，则递减轮数 4 → 3 → 2 → 1。</li>
+ *   <li>若 1 轮仍超，对该单轮调用 LLM 摘要压缩。</li>
+ *   <li>① 仍然失败 → 抛 ContextOverflowException，由 TokenBudgetObserver 终止（CONTEXT_OVERFLOW）。</li>
  * </ol>
  *
- * <p>v1 简化：摘要调用一个独立的 LLM（{@link SummarizerChatModel} 接口，由调用方注入），
- * 不阻塞主 loop。当 LLM 调用失败时降级为本地启发式摘要（保留首尾几行的纯文本拼接），
- * 保证压缩永远能产生一个能塞回历史的 system message。
+ * <p>不再使用"滑窗淘汰 + 占位符"。压缩仅针对 messages key；
+ * memory_index / mid_term / long_term / ephemeral 由各自独立的策略控制。
  *
- * <p>本类同时实现 {@link ContextCompressionHook} 接口（part3 §6.4 步骤 4 的契约），
- * 注入到 {@link org.example.agent.core.observer.TokenBudgetObserver} 后即生效。
+ * <p>本类同时实现 {@link ContextCompressionHook} 接口，注入到 {@link org.example.agent.core.observer.TokenBudgetObserver} 后即生效。
+ * v1 简化：Hook 入口返回 false，让 ContextBuilder 在 build() 时主动调用 {@link #loadMessages}。
  */
 @Slf4j
 @Component
 public class ConversationCompressor implements ContextCompressionHook {
 
-    /** 摘要提示词模板。 */
-    public static final String SUMMARY_SYSTEM_PROMPT = """
-            你是会话摘要器。给定一段历史对话，请用结构化中文输出摘要，控制在 1500 token 以内。
-            摘要必须包含四个部分：
+    /** 单轮 LLM 摘要提示词。 */
+    public static final String SINGLE_ROUND_SUMMARY_PROMPT = """
+            你是会话摘要器。给定单个对话轮（user + assistant + 工具调用结果），请用结构化中文输出 200 token 以内的摘要。
 
-            1. 用户的核心目标是什么
-            2. 已经做了哪些事、得到了什么结论
-            3. 待解决的问题
-            4. 关键引用（文件路径、命令、错误信息）
+            摘要必须包含：
+            1. 用户的提问
+            2. 助手做了什么（描述工具调用与关键结论）
+            3. 是否完成 / 给出了什么成果
 
             风格：客观、第三人称，不添加原对话没有的信息；不要编造文件路径。
             """;
@@ -66,108 +64,97 @@ public class ConversationCompressor implements ContextCompressionHook {
 
     @Override
     public boolean tryCompress(String executionId, long promptTokens, long effectiveBudget) {
-        // TokenBudgetObserver 的 hook 入口。我们没有 executionId -> sessionId 的映射
-        // （observer 是单次执行级别的，sessionId 是 AgentTask 的）。这里直接返回 false
-        // 让上层 ContextBuilder 在 build() 时主动调 compress(history, ...)。
-        // Hook 入口更适合的是「下一次 LLM 调用前的 in-place 替换」语义，
-        // 留给 ContextBuilder 做。
         log.debug("CompressionHook invoked but routed through ContextBuilder: executionId={} prompt={}/{}",
                 executionId, promptTokens, effectiveBudget);
         return false;
     }
 
     /**
-     * 把超长的 history 压缩到 sessionReserved 预算内。
+     * 按 part3.md §6.6 规则 1 加载 messages：
+     * <ol>
+     *   <li>默认取最近 5 轮。</li>
+     *   <li>超预算则 4 → 3 → 2 → 1 递减。</li>
+     *   <li>1 轮仍超则对单轮做 LLM 摘要压缩。</li>
+     *   <li>仍超 → 抛 {@link ContextOverflowException}。</li>
+     * </ol>
      *
-     * @param history  当前 session 累积的全部消息（含 user / assistant / tool）
-     * @param policy   预算策略
-     * @param task     当前 AgentTask（用于日志关联，可选）
-     * @return 压缩后的新消息列表（可能包含 1 条 system 摘要 + K 轮原文）
+     * @param history 当前 session 累积的全部消息
+     * @param policy  预算策略
+     * @param task    当前 AgentTask（用于日志关联，可选）
+     * @return 压缩后的消息列表（可能是单轮或多轮原文 + 摘要）
      */
-    public List<Message> compress(List<Message> history, ContextBudgetPolicy policy, AgentTask task) {
+    public List<Message> loadMessages(List<Message> history, ContextBudgetPolicy policy, AgentTask task) {
         if (history == null || history.isEmpty()) return new ArrayList<>();
         ContextBudgetPolicy p = policy == null ? this.policy : policy;
-        int k = p.getKeepRecentRounds();
-        long summaryCap = p.getSummaryTokenCap();
-        long sessionReserved = p.sessionReserved();
+        long dynamicReserved = p.dynamicReserved();
+        int startRounds = p.getKeepRecentRounds();
 
-        // 把 history 切成「旧段 + 新段」。
-        // 「最近 K 轮」的最小化定义：每轮 = 1 user + 1 assistant（含 tool_calls + tool responses 的连续块）。
-        // 这里采用近似策略：以 user 为锚点向后扫 K 个 user，标记所有这些 user 之后到末尾的所有消息。
-        int splitIdx = splitKeepRecent(history, k);
-        if (splitIdx <= 0) {
-            log.debug("Compress: history too short to compress (size={}, k={})", history.size(), k);
-            return history;
-        }
-        List<Message> oldPart = history.subList(0, splitIdx);
-        List<Message> recent = new ArrayList<>(history.subList(splitIdx, history.size()));
-
-        // 1. 调 LLM 生成摘要
-        String summary;
-        try {
-            summary = summarizer.summarize(SUMMARY_SYSTEM_PROMPT, oldPart);
-        } catch (Exception ex) {
-            log.warn("Compress: summarizer LLM failed, falling back to local heuristic: {}", ex.getMessage());
-            summary = localHeuristicSummary(oldPart);
-        }
-        if (summary == null) summary = "";
-        summary = truncateToTokens(summary, summaryCap);
-
-        // 2. 拼装新 history：1 条 system 摘要 + recent
-        List<Message> compressed = new ArrayList<>();
-        compressed.add(new SystemMessage("以下是早期对话摘要：\n" + summary));
-
-        // 3. 如果拼接后仍超 sessionReserved，逐轮丢弃最早的非 system 消息
-        compressed.addAll(recent);
-        long used = estimateMessagesTokens(compressed);
-        int safety = recent.size();
-        while (used > sessionReserved && safety-- > 0 && compressed.size() > 1) {
-            // 跳过首条 system 摘要
-            int dropIdx = -1;
-            for (int i = 1; i < compressed.size(); i++) {
-                if (!(compressed.get(i) instanceof SystemMessage)) {
-                    dropIdx = i;
-                    break;
-                }
+        // 1) 从 keepRecentRounds 递减到 1
+        for (int rounds = startRounds; rounds >= 1; rounds--) {
+            List<Message> slice = takeRecentRounds(history, rounds);
+            long used = estimateMessagesTokens(slice);
+            if (used <= dynamicReserved) {
+                return slice;
             }
-            if (dropIdx < 0) break;
-            compressed.remove(dropIdx);
-            used = estimateMessagesTokens(compressed);
+            log.debug("loadMessages: {} rounds used {} > reserved {}, trying fewer rounds",
+                    rounds, used, dynamicReserved);
         }
 
-        log.info("Compress: history {} -> {} messages, tokens {} -> {} (budget {})",
-                history.size(), compressed.size(),
-                estimateMessagesTokens(history), used, sessionReserved);
+        // 2) 1 轮仍超：对单轮做 LLM 摘要压缩
+        List<Message> singleRound = takeRecentRounds(history, 1);
+        if (singleRound.isEmpty()) {
+            throw new ContextBuilder.ContextOverflowException(
+                    "history cannot produce any round",
+                    estimateMessagesTokens(history), dynamicReserved);
+        }
+        String summary = trySummarizeRound(singleRound);
+        if (summary == null) summary = localHeuristicSummary(singleRound);
+        summary = truncateToTokens(summary, p.getSummaryTokenCap());
+        List<Message> compressed = new ArrayList<>();
+        compressed.add(new SystemMessage("（以下是 1 轮对话的 LLM 摘要，原始消息因长度超出已折叠）\n" + summary));
+        long used = estimateMessagesTokens(compressed);
+        log.info("loadMessages: 1-round overflow, summarized to {} tokens", used);
 
-        // 4. 标记 session 已压缩（给 /cost 用）
-        if (task != null && task.getSessionId() != null) {
-            // sessionStore 在注入式路径里也能拿到；这里不强依赖，避免循环注入
+        // 3) 仍超 → 抛 overflow
+        if (used > dynamicReserved) {
+            throw new ContextBuilder.ContextOverflowException(
+                    "single round summary exceeds reserved budget: " + used + " > " + dynamicReserved,
+                    used, dynamicReserved);
         }
         return compressed;
     }
 
     /**
-     * 在 history 里找到「最近 K 轮 user message」的起始下标。
-     * <p>每轮的边界：从一个 user 起，到下一个 user 之前结束。
+     * 取最近 K 轮对话。
+     * <p>每轮定义：从一个 user 起，到下一个 user 之前结束（即 user + 后续 assistant / tool_call / tool_response）。
      */
-    static int splitKeepRecent(List<Message> history, int k) {
+    static List<Message> takeRecentRounds(List<Message> history, int k) {
+        if (k <= 0 || history.isEmpty()) return new ArrayList<>();
+        int targetUserStart = -1;
         int userCount = 0;
-        int targetUserStartIdx = -1;
         for (int i = history.size() - 1; i >= 0; i--) {
-            Message m = history.get(i);
-            if (m instanceof UserMessage) {
+            if (history.get(i) instanceof UserMessage) {
                 userCount++;
                 if (userCount == k) {
-                    targetUserStartIdx = i;
+                    targetUserStart = i;
                     break;
                 }
             }
         }
-        if (targetUserStartIdx <= 0) {
-            // K 轮都没凑齐 → 不压缩（返回 0，外层判断）
-            return 0;
+        if (targetUserStart < 0) {
+            // K 轮不够，但 history 里有 user：返回所有
+            return new ArrayList<>(history);
         }
-        return targetUserStartIdx;
+        return new ArrayList<>(history.subList(targetUserStart, history.size()));
+    }
+
+    private String trySummarizeRound(List<Message> round) {
+        try {
+            return summarizer.summarize(SINGLE_ROUND_SUMMARY_PROMPT, round);
+        } catch (Exception ex) {
+            log.warn("Summarizer LLM failed, falling back: {}", ex.getMessage());
+            return null;
+        }
     }
 
     private static long estimateMessagesTokens(List<Message> msgs) {
@@ -185,13 +172,11 @@ public class ConversationCompressor implements ContextCompressionHook {
         return text.substring(0, (int) maxChars) + "\n... (truncated)";
     }
 
-    /** 本地兜底摘要 —— LLM 不可用时用首尾 N 行拼接，给压缩钩子一个永远能跑的实现。 */
-    static String localHeuristicSummary(List<Message> history) {
+    /** 本地兜底摘要 —— LLM 不可用时用首尾 N 行拼接。 */
+    static String localHeuristicSummary(List<Message> round) {
         StringBuilder sb = new StringBuilder();
         sb.append("【本地摘要（LLM 不可用时的兜底）】\n");
-        sb.append("历史消息 ").append(history.size()).append(" 条；保留关键片段：\n\n");
-        int kept = 0;
-        for (Message m : history) {
+        for (Message m : round) {
             String text = SessionMessageStore.extractText(m);
             if (text == null || text.isBlank()) continue;
             if (text.length() > 400) text = text.substring(0, 400) + "...";
@@ -201,20 +186,12 @@ public class ConversationCompressor implements ContextCompressionHook {
             else if (m instanceof SystemMessage) role = "系统";
             else role = m.getClass().getSimpleName();
             sb.append("- [").append(role).append("] ").append(text.replace("\n", " ")).append("\n");
-            kept++;
-            if (kept >= 30) {
-                sb.append("- ... (后续省略)\n");
-                break;
-            }
         }
         return sb.toString();
     }
 
     // ============== 摘要 LLM 接口 ==============
 
-    /**
-     * 摘要模型接口。生产实现接 DashScopeChatModel；测试 / 本地实现走 FallbackSummarizer。
-     */
     public interface SummarizerChatModel {
         String summarize(String systemPrompt, List<Message> history);
     }

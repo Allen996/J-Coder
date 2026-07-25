@@ -63,11 +63,16 @@ public class AutoCompressionObserver implements ReActLoopObserver {
 
         long used = sessionStore.estimateUsedTokens(sessionId);
         if (policy.shouldTriggerCompression(used)) {
-            log.info("AutoCompressionObserver: session {} used {} > 80% of reserved {}, compressing",
-                    sessionId, used, policy.sessionReserved());
+            log.info("AutoCompressionObserver: session {} used {} > 80% of dynamic reserved {}, compressing",
+                    sessionId, used, policy.dynamicReserved());
             List<Message> history = session.snapshot();
             try {
-                List<Message> compressed = compressor.compress(history, policy, null);
+                org.example.agent.core.task.AgentTask stub = org.example.agent.core.task.AgentTask.builder()
+                        .sessionId(sessionId)
+                        .input("")
+                        .role("chat")
+                        .build();
+                List<Message> compressed = compressor.loadMessages(history, policy, stub);
                 session.replaceAll(compressed);
                 session.markCompressed(extractSummaryText(compressed));
             } catch (Exception ex) {

@@ -5,6 +5,7 @@ import org.example.agent.context.compression.ConversationCompressor;
 import org.example.agent.context.session.SessionMessageStore;
 import org.example.cli.bootstrap.CliContext;
 import org.example.cli.command.SlashCommand;
+import org.example.agent.core.task.AgentTask;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.stereotype.Component;
 
@@ -32,7 +33,7 @@ public class CompactCommand implements SlashCommand {
 
     @Override
     public String description() {
-        return "manually trigger context compression";
+        return "manually trigger context compression (5 rounds decrement + single-round LLM summary)";
     }
 
     @Override
@@ -47,11 +48,21 @@ public class CompactCommand implements SlashCommand {
             return 0;
         }
 
-        List<Message> compressed = compressor.compress(history, policy, null);
-        session.replaceAll(compressed);
-        long afterTokens = sessionStore.estimateUsedTokens(sessionId);
-        ctx.out().printf("compact: %d messages -> %d messages, %d tokens -> %d tokens (budget %d)%n",
-                history.size(), compressed.size(), beforeTokens, afterTokens, policy.sessionReserved());
+        try {
+            AgentTask stub = AgentTask.builder()
+                    .sessionId(sessionId)
+                    .input("")
+                    .role("chat")
+                    .build();
+            List<Message> compressed = compressor.loadMessages(history, policy, stub);
+            session.replaceAll(compressed);
+            long afterTokens = sessionStore.estimateUsedTokens(sessionId);
+            ctx.out().printf("compact: %d messages -> %d messages, %d tokens -> %d tokens (dynamic budget %d)%n",
+                    history.size(), compressed.size(), beforeTokens, afterTokens, policy.dynamicReserved());
+        } catch (org.example.agent.context.builder.ContextBuilder.ContextOverflowException ex) {
+            ctx.out().printf("compact: overflow (used=%d > reserved=%d). History reduced but still exceeds budget.%n",
+                    ex.getUsed(), ex.getReserved());
+        }
         ctx.out().flush();
         return 0;
     }

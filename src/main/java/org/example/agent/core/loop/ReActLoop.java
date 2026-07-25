@@ -1,9 +1,6 @@
 package org.example.agent.core.loop;
 
 import org.example.agent.context.builder.ContextBuilder;
-import org.example.agent.context.compression.ConversationCompressor;
-import org.example.agent.context.project.ProjectContext;
-import org.example.agent.context.project.ProjectContextCache;
 import org.example.agent.core.budget.AgentBudget;
 import org.example.agent.core.event.ThoughtEvent;
 import org.example.agent.core.kind.StepKind;
@@ -77,7 +74,6 @@ public class ReActLoop {
     private final List<ToolCallback> toolCallbacks;
     private final SideEffectTracker sideEffects;
     private final ContextBuilder contextBuilder;
-    private final ProjectContextCache projectContextCache;
 
     public ReActLoop(String executionId,
                      ChatModel chatModel,
@@ -86,7 +82,7 @@ public class ReActLoop {
                      ToolGateway toolGateway,
                      List<ToolCallback> toolCallbacks,
                      SideEffectTracker sideEffects) {
-        this(executionId, chatModel, task, budget, toolGateway, toolCallbacks, sideEffects, null, null);
+        this(executionId, chatModel, task, budget, toolGateway, toolCallbacks, sideEffects, null);
     }
 
     public ReActLoop(String executionId,
@@ -96,8 +92,7 @@ public class ReActLoop {
                      ToolGateway toolGateway,
                      List<ToolCallback> toolCallbacks,
                      SideEffectTracker sideEffects,
-                     ContextBuilder contextBuilder,
-                     ProjectContextCache projectContextCache) {
+                     ContextBuilder contextBuilder) {
         this.executionId = executionId;
         this.chatModel = chatModel;
         this.task = task;
@@ -107,7 +102,6 @@ public class ReActLoop {
         this.toolCallbacks = toolCallbacks == null ? List.of() : toolCallbacks;
         this.sideEffects = sideEffects;
         this.contextBuilder = contextBuilder;
-        this.projectContextCache = projectContextCache;
         log.info("executionId={} ReActLoop initialized with {} tool callbacks: {}",
                 executionId,
                 this.toolCallbacks.size(),
@@ -250,10 +244,10 @@ public class ReActLoop {
         if (contextBuilder != null) {
             try {
                 ContextBuilder.BuiltContext built = contextBuilder.build(task, input);
-                log.debug("executionId={} ContextBuilder assembled {} messages (system={} project={} session={}, budget={})",
+                log.debug("executionId={} ContextBuilder assembled {} messages (static={} dynamic={} total={}, dynamic budget={})",
                         executionId, built.getMessages().size(),
-                        built.getSystemTokens(), built.getProjectTokens(),
-                        built.getSessionTokens(), built.getSessionReserved());
+                        built.getStaticTokens(), built.getDynamicTokens(),
+                        built.getTotalTokens(), built.getDynamicReserved());
                 return new ArrayList<>(built.getMessages());
             } catch (ContextBuilder.ContextOverflowException ex) {
                 // 装配阶段已经超预算 —— 让 ReActLoop 进入下一轮立即被 TokenBudgetObserver 终结。

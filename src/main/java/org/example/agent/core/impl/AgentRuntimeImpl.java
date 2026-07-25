@@ -4,7 +4,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.agent.context.budget.ContextAwareAgentBudgetFactory;
 import org.example.agent.context.builder.ContextBuilder;
 import org.example.agent.context.compression.AutoCompressionObserver;
-import org.example.agent.context.project.ProjectContextCache;
+import org.example.agent.context.memory.LongTermMaintainer;
+import org.example.agent.context.memory.MemoryTurnHook;
 import org.example.agent.context.session.SessionMessageStore;
 import org.example.agent.core.budget.AgentBudget;
 import org.example.agent.core.event.AgentEvent;
@@ -74,10 +75,11 @@ public class AgentRuntimeImpl implements AgentRuntime {
     private final List<ReActLoopObserver> observers = new CopyOnWriteArrayList<>();
     private final ExecutorService blockingExecutor;
     private final ContextBuilder contextBuilder;
-    private final ProjectContextCache projectContextCache;
     private final AutoCompressionObserver autoCompressionObserver;
     private final SessionMessageStore sessionStore;
     private final ContextAwareAgentBudgetFactory budgetFactory;
+    private final MemoryTurnHook memoryTurnHook;
+    private final LongTermMaintainer longTermMaintainer;
 
     @Autowired
     public AgentRuntimeImpl(ChatModel chatModel,
@@ -85,13 +87,31 @@ public class AgentRuntimeImpl implements AgentRuntime {
                             ObjectProvider<ToolCallbackProvider> toolCallbackProvider,
                             SideEffectTracker sideEffectTracker,
                             ContextBuilder contextBuilder,
-                            ProjectContextCache projectContextCache,
                             AutoCompressionObserver autoCompressionObserver,
                             SessionMessageStore sessionStore,
-                            ContextAwareAgentBudgetFactory budgetFactory) {
+                            ContextAwareAgentBudgetFactory budgetFactory,
+                            MemoryTurnHook memoryTurnHook,
+                            LongTermMaintainer longTermMaintainer) {
         this(chatModel, toolGateway, toolCallbackProvider, sideEffectTracker,
-                contextBuilder, projectContextCache, autoCompressionObserver, sessionStore,
-                budgetFactory, defaultBlockingExecutor());
+                contextBuilder, autoCompressionObserver, sessionStore,
+                budgetFactory, memoryTurnHook, longTermMaintainer, defaultBlockingExecutor());
+    }
+
+    /**
+     * 测试 / 旧装配入口 —— 不带记忆钩子;记忆相关操作全部走 null-safe noop。
+     */
+    public AgentRuntimeImpl(ChatModel chatModel,
+                            ToolGateway toolGateway,
+                            ObjectProvider<ToolCallbackProvider> toolCallbackProvider,
+                            SideEffectTracker sideEffectTracker,
+                            ContextBuilder contextBuilder,
+                            AutoCompressionObserver autoCompressionObserver,
+                            SessionMessageStore sessionStore,
+                            ContextAwareAgentBudgetFactory budgetFactory,
+                            ExecutorService blockingExecutor) {
+        this(chatModel, toolGateway, toolCallbackProvider, sideEffectTracker,
+                contextBuilder, autoCompressionObserver, sessionStore,
+                budgetFactory, null, null, blockingExecutor);
     }
 
     public AgentRuntimeImpl(ChatModel chatModel,
@@ -99,20 +119,22 @@ public class AgentRuntimeImpl implements AgentRuntime {
                             ObjectProvider<ToolCallbackProvider> toolCallbackProvider,
                             SideEffectTracker sideEffectTracker,
                             ContextBuilder contextBuilder,
-                            ProjectContextCache projectContextCache,
                             AutoCompressionObserver autoCompressionObserver,
                             SessionMessageStore sessionStore,
                             ContextAwareAgentBudgetFactory budgetFactory,
+                            MemoryTurnHook memoryTurnHook,
+                            LongTermMaintainer longTermMaintainer,
                             ExecutorService blockingExecutor) {
         this.chatModel = chatModel;
         this.toolGateway = toolGateway;
-        this.toolCallbackProvider = toolCallbackProvider.getIfAvailable();
+        this.toolCallbackProvider = toolCallbackProvider == null ? null : toolCallbackProvider.getIfAvailable();
         this.sideEffectTracker = sideEffectTracker;
         this.contextBuilder = contextBuilder;
-        this.projectContextCache = projectContextCache;
         this.autoCompressionObserver = autoCompressionObserver;
         this.sessionStore = sessionStore;
         this.budgetFactory = budgetFactory;
+        this.memoryTurnHook = memoryTurnHook;
+        this.longTermMaintainer = longTermMaintainer;
         this.registry = new ExecutionRegistry();
         this.blockingExecutor = blockingExecutor;
     }
@@ -140,6 +162,7 @@ public class AgentRuntimeImpl implements AgentRuntime {
             ReActLoop.SubscribeResult sr = ctx.reactLoop.subscribe(task.getInput(), java.util.Map.of(), ctx.observers, ctx.signal);
             ctx.fullAnswer = sr.fullAnswer();
             persistTurn(task.getSessionId(), sr.turnMessages());
+            postTurnMemory(task.getSessionId());
             return finalize(ctx, null);
         } catch (RuntimeException ex) {
             return finalize(ctx, ex);
@@ -150,7 +173,6 @@ public class AgentRuntimeImpl implements AgentRuntime {
     public Flux<AgentEvent> stream(AgentTask task) {
         ExecutionContext ctx = prepare(task);
         return Flux.create(sink -> {
-            // 增量发射桥：放到 observers 链最前，每个事件触发时立即 sink.next
             SinkEmittingObserver bridge = new SinkEmittingObserver(sink);
             ctx.observers.add(0, bridge);
 
@@ -165,7 +187,7 @@ public class AgentRuntimeImpl implements AgentRuntime {
             registry.register(ctx.executionId, handle);
             try {
                 sink.onRequest(req -> {
-                    // noop：Flux.create 默认就是 push 模式
+                    // noop
                 });
                 sink.onCancel(() -> handle.cancelNow());
 
@@ -173,13 +195,12 @@ public class AgentRuntimeImpl implements AgentRuntime {
                     ReActLoop.SubscribeResult sr = ctx.reactLoop.subscribe(task.getInput(), java.util.Map.of(), ctx.observers, ctx.signal);
                     ctx.fullAnswer = sr.fullAnswer();
                     persistTurn(task.getSessionId(), sr.turnMessages());
+                    postTurnMemory(task.getSessionId());
                     AgentExecutionResult result = finalize(ctx, null);
-                    // bridge 已经在 finalize 的 onFinish dispatch 中 emit 过 FinishEvent
                     handle.markDone(result.getReason().name());
                     sink.complete();
                 } catch (RuntimeException ex) {
                     AgentExecutionResult result = finalize(ctx, ex);
-                    // finalize 已通过 observer 派发 LoopErrorEvent + FinishEvent，bridge 已 sink.next
                     handle.markDone(result.getReason().name());
                     sink.error(new RuntimeException(result.getReason().name(), ex));
                 }
@@ -210,7 +231,6 @@ public class AgentRuntimeImpl implements AgentRuntime {
         return Collections.unmodifiableList(observers);
     }
 
-    /** 测试用：返回当前 ExecutionRegistry。 */
     public ExecutionRegistry registry() {
         return registry;
     }
@@ -225,6 +245,27 @@ public class AgentRuntimeImpl implements AgentRuntime {
             sessionStore.getOrCreate(sessionId).addAll(turnMessages);
         } catch (RuntimeException ex) {
             log.warn("Failed to persist completed turn for session {}: {}", sessionId, ex.getMessage(), ex);
+        }
+    }
+
+    /**
+     * 每轮 mid-term 增量更新 + 标记当前 session 为 long-term 维护器的活动 session
+     * （part4 §7.2 + 用户澄清 "long memo 提取异步进行"）。
+     * 失败 swallow + log,不阻塞主流程。
+     */
+    private void postTurnMemory(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return;
+        if (memoryTurnHook != null) {
+            try {
+                memoryTurnHook.onTurnFinished(sessionId);
+            } catch (RuntimeException ex) {
+                log.warn("memoryTurnHook failed for {}: {}", sessionId, ex.getMessage());
+            }
+        }
+        if (longTermMaintainer != null) {
+            try {
+                longTermMaintainer.setActiveSessionId(sessionId);
+            } catch (RuntimeException ignore) { }
         }
     }
 
@@ -256,7 +297,7 @@ public class AgentRuntimeImpl implements AgentRuntime {
 
         DefaultReActLoopSignal signal = new DefaultReActLoopSignal();
         ReActLoop loop = new ReActLoop(executionId, chatModel, task, budget, toolGateway,
-                currentToolCallbacks(), sideEffectTracker, contextBuilder, projectContextCache);
+                currentToolCallbacks(), sideEffectTracker, contextBuilder);
         AgentExecutionRecord.Builder recordBuilder = AgentExecutionRecord.builder()
                 .executionId(executionId)
                 .task(task)
@@ -290,7 +331,6 @@ public class AgentRuntimeImpl implements AgentRuntime {
             dispatch(ctx.observers, o -> o.onError(err, ctx.signal));
         }
 
-        // 把越界事件显式 emit 给 observers（即便 signal 没被动触发也兜底）
         if (FinishReason.TOKEN_LIMIT == reason) {
             TokenBudgetEvent exceeded = TokenBudgetEvent.builder()
                     .executionId(ctx.executionId)
@@ -303,8 +343,6 @@ public class AgentRuntimeImpl implements AgentRuntime {
             dispatch(ctx.observers, o -> o.onTokenBudgetExceeded(exceeded, ctx.signal));
         }
         if (FinishReason.CONTEXT_OVERFLOW == reason) {
-            // per-call 上下文越界：maxTokens 取 effective 上限，tokensUsed 取本轮实测 prompt，
-            // 让上层拿到的是「这一通对话的 prompt 已经装不进窗口」而不是累计值。
             TokenBudgetEvent exceeded = TokenBudgetEvent.builder()
                     .executionId(ctx.executionId)
                     .at(Instant.now())
@@ -328,8 +366,6 @@ public class AgentRuntimeImpl implements AgentRuntime {
         }
 
         String finalAnswer = collectFinalAnswer(ctx);
-        // ReActLoop.subscribe 累积的 fullAnswer 是流式增量的权威来源，优先采用；
-        // 当 subscribe 失败（thrown != null）时退到 recorder 里的 ThoughtEvent 拼接。
         if (ctx.fullAnswer != null && !ctx.fullAnswer.isEmpty()) {
             finalAnswer = ctx.fullAnswer;
         }
@@ -399,7 +435,6 @@ public class AgentRuntimeImpl implements AgentRuntime {
         }
     }
 
-    /** 单次执行的内部状态。 */
     private static final class ExecutionContext {
         final String executionId;
         final AgentBudget budget;
@@ -411,7 +446,6 @@ public class AgentRuntimeImpl implements AgentRuntime {
         final TimeoutObserver timeoutObs;
         final EventRecordingObserver recorder;
         final AgentExecutionRecord.Builder recordBuilder;
-        // 由 execute() / stream() 在 reactLoop.subscribe() 返回后写入，作为 finalAnswer 权威源
         volatile String fullAnswer;
 
         ExecutionContext(String executionId,

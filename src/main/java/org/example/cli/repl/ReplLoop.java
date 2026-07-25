@@ -1,6 +1,8 @@
 package org.example.cli.repl;
 
 import lombok.extern.slf4j.Slf4j;
+import org.example.agent.context.memory.MemoryTurnHook;
+import org.example.agent.context.memory.MidTermStore;
 import org.example.agent.core.runtime.AgentRuntime;
 import org.example.agent.core.task.AgentTask;
 import org.example.cli.bootstrap.CliContext;
@@ -25,6 +27,8 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -48,6 +52,8 @@ public class ReplLoop {
     private static final String PROMPT_PRIMARY = "[1m[36m▌[0m ";
     private static final String PROMPT_CONTINUATION = "[36m›[0m ";
     private static final long POLL_INTERVAL_MS = 100L;
+    /** part4 §7.8 / §7.2 "会话结束的空闲超时阈值 (默认 10 分钟)"。 */
+    private static final long SESSION_IDLE_MINUTES = 10L;
 
     private final AgentRuntime runtime;
     private final SessionState session;
@@ -58,10 +64,14 @@ public class ReplLoop {
     private final ShellPassthrough shellPassthrough;
     private final CliRenderer renderer;
     private final MultiLineReader multiLineReader = new MultiLineReader();
+    private final MemoryTurnHook memoryTurnHook;
 
     private final Path projectRoot;
     private final PrintWriter out;
     private final Terminal terminal;
+
+    /** 每轮 agent 完成后更新；下次 dispatchAgent 比对差值判定是否空闲超时(part4 §7.8 / §7.2 默认 10 分钟)。 */
+    private volatile Instant lastTurnAt = Instant.now();
 
     public ReplLoop(AgentRuntime runtime,
                     SessionState session,
@@ -70,7 +80,8 @@ public class ReplLoop {
                     InputRouter inputRouter,
                     AtFileResolver atFileResolver,
                     ShellPassthrough shellPassthrough,
-                    CliRenderer renderer) {
+                    CliRenderer renderer,
+                    MemoryTurnHook memoryTurnHook) {
         this.runtime = runtime;
         this.session = session;
         this.env = env;
@@ -79,6 +90,7 @@ public class ReplLoop {
         this.atFileResolver = atFileResolver;
         this.shellPassthrough = shellPassthrough;
         this.renderer = renderer;
+        this.memoryTurnHook = memoryTurnHook;
         this.projectRoot = Paths.get("").toAbsolutePath();
         try {
             this.terminal = TerminalBuilder.builder().build();
@@ -189,6 +201,26 @@ public class ReplLoop {
     }
 
     private void dispatchAgent(String raw, CliContext ctx) {
+        // 空闲超时检测 (part4 §7.8 / §7.2):超过 SESSION_IDLE_MINUTES 分钟视为上一 session 结束,
+        // 触发 mid-term 整体重生成(part4 §7.2 "会话结束时整体重生成")。
+        Instant now = Instant.now();
+        if (memoryTurnHook != null) {
+            Duration idle = Duration.between(lastTurnAt, now);
+            if (idle.toMinutes() >= SESSION_IDLE_MINUTES) {
+                try {
+                    MidTermStore.MidTerm regenerated = memoryTurnHook.regenerateForSession(session.getSessionId());
+                    out.println(AnsiStyle.wrap(AnsiStyle.GRAY_DIM,
+                            "[memory] idle " + idle.toMinutes() + "min >= " + SESSION_IDLE_MINUTES
+                                    + "min: regenerated mid-term for session "
+                                    + session.getSessionId()
+                                    + (regenerated == null ? " (no-op)" : "")));
+                    out.flush();
+                } catch (RuntimeException ex) {
+                    log.warn("Idle-triggered mid-term regeneration failed: {}", ex.getMessage());
+                }
+            }
+        }
+
         AtFileResolver.Resolved resolved = atFileResolver.resolve(raw, projectRoot);
         String finalInput = atFileResolver.buildPrompt(resolved, projectRoot);
         if (finalInput.isBlank()) {
@@ -238,6 +270,8 @@ public class ReplLoop {
             }
         }
         renderer.drainTo(out, 500);
+        // 本轮 agent 收尾完成,刷新 lastTurnAt 给下次 idle 检测比对。
+        lastTurnAt = Instant.now();
     }
 
     private CliContext buildContext() {
