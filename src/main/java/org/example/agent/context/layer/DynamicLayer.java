@@ -48,7 +48,8 @@ public class DynamicLayer extends ContextLayer {
                 ContextKey.MID_TERM,
                 ContextKey.LONG_TERM,
                 ContextKey.MEMORY_INDEX,
-                ContextKey.EPHEMERAL
+                ContextKey.EPHEMERAL,
+                ContextKey.TASK_PLAN
         };
     }
 

@@ -36,7 +36,8 @@ public enum ContextKey {
     MID_TERM(Layer.DYNAMIC, Channel.TEXT, "mid_term"),
     LONG_TERM(Layer.DYNAMIC, Channel.TEXT, "long_term"),
     MEMORY_INDEX(Layer.DYNAMIC, Channel.TEXT, "memory_index"),
-    EPHEMERAL(Layer.DYNAMIC, Channel.TEXT, "ephemeral");
+    EPHEMERAL(Layer.DYNAMIC, Channel.TEXT, "ephemeral"),
+    TASK_PLAN(Layer.DYNAMIC, Channel.TEXT, "task_plan");
 
     public enum Layer { STATIC, DYNAMIC }
 

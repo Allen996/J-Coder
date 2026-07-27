@@ -235,23 +235,23 @@ public class SessionMessageStore {
     static ParsedSection parseSection(String section) {
         if (section == null) return null;
         ParsedSection ps = new ParsedSection();
-        String[] lines = section.split("\n");
+        String[] lines = section.split("\n", -1);
         boolean inContent = false;
         StringBuilder content = new StringBuilder();
         for (String line : lines) {
             String s = line.stripLeading();
-            if (s.startsWith("- message_id:")) {
-                ps.messageId = s.substring("- message_id:".length()).strip();
-            } else if (s.startsWith("- role:")) {
-                ps.role = s.substring("- role:".length()).strip();
-            } else if (s.startsWith("- timestamp:")) {
-                ps.timestamp = s.substring("- timestamp:".length()).strip();
-            } else if (s.startsWith("- content:")) {
-                inContent = true;
-            } else if (inContent && s.startsWith("|")) {
-                content.append(s.substring(1).stripLeading()).append("\n");
-            } else if (inContent && s.startsWith("- ")) {
-                inContent = false;
+            if (!inContent) {
+                if (s.startsWith("- message_id:")) {
+                    ps.messageId = s.substring("- message_id:".length()).strip();
+                } else if (s.startsWith("- role:")) {
+                    ps.role = s.substring("- role:".length()).strip();
+                } else if (s.startsWith("- timestamp:")) {
+                    ps.timestamp = s.substring("- timestamp:".length()).strip();
+                } else if (s.startsWith("- content:")) {
+                    inContent = true;
+                }
+            } else {
+                content.append(line).append("\n");
             }
         }
         ps.content = content.toString().strip();

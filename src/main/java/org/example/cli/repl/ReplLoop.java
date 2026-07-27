@@ -5,6 +5,10 @@ import org.example.agent.context.memory.MemoryTurnHook;
 import org.example.agent.context.memory.MidTermStore;
 import org.example.agent.core.runtime.AgentRuntime;
 import org.example.agent.core.task.AgentTask;
+import org.example.agent.core.task.TaskPlan;
+import org.example.agent.core.task.TaskPlanStatus;
+import org.example.agent.core.task.orchestrator.TaskOrchestrator;
+import org.example.agent.core.task.persistence.TaskPlanRepository;
 import org.example.cli.bootstrap.CliContext;
 import org.example.cli.command.SlashCommandRegistry;
 import org.example.cli.input.AtFileResolver;
@@ -12,6 +16,7 @@ import org.example.cli.input.InputRouter;
 import org.example.cli.input.ShellPassthrough;
 import org.example.cli.renderer.AnsiStyle;
 import org.example.cli.renderer.CliRenderer;
+import org.example.cli.renderer.TaskProgressRenderer;
 import org.example.cli.session.SessionState;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
@@ -29,6 +34,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -63,6 +69,9 @@ public class ReplLoop {
     private final AtFileResolver atFileResolver;
     private final ShellPassthrough shellPassthrough;
     private final CliRenderer renderer;
+    private final TaskProgressRenderer taskRenderer;
+    private final TaskOrchestrator orchestrator;
+    private final TaskPlanRepository taskPlanRepository;
     private final MultiLineReader multiLineReader = new MultiLineReader();
     private final MemoryTurnHook memoryTurnHook;
 
@@ -81,6 +90,9 @@ public class ReplLoop {
                     AtFileResolver atFileResolver,
                     ShellPassthrough shellPassthrough,
                     CliRenderer renderer,
+                    TaskProgressRenderer taskRenderer,
+                    TaskOrchestrator orchestrator,
+                    TaskPlanRepository taskPlanRepository,
                     MemoryTurnHook memoryTurnHook) {
         this.runtime = runtime;
         this.session = session;
@@ -90,6 +102,9 @@ public class ReplLoop {
         this.atFileResolver = atFileResolver;
         this.shellPassthrough = shellPassthrough;
         this.renderer = renderer;
+        this.taskRenderer = taskRenderer;
+        this.orchestrator = orchestrator;
+        this.taskPlanRepository = taskPlanRepository;
         this.memoryTurnHook = memoryTurnHook;
         this.projectRoot = Paths.get("").toAbsolutePath();
         try {
@@ -270,6 +285,27 @@ public class ReplLoop {
             }
         }
         renderer.drainTo(out, 500);
+
+        // Part 5 §8.8 / §8.9: 如果本轮 agent 创建了 TaskPlan，串行驱动 orchestrator
+        if (orchestrator.activePlan().isPresent()
+                && orchestrator.activePlan().get().getStatus()
+                        == org.example.agent.core.task.TaskPlanStatus.ACTIVE) {
+            try {
+                orchestrator.runActivePlan();
+                taskRenderer.drainTo(out, 200);
+                out.println(AnsiStyle.wrap(AnsiStyle.CYAN_BOLD,
+                        "[orchestrator] plan "
+                                + orchestrator.activePlan().map(p -> p.getPlanId()).orElse("?")
+                                + " finished: "
+                                + orchestrator.activePlan().map(p -> p.getStatus().name()).orElse("?")));
+                out.flush();
+            } catch (RuntimeException ex) {
+                out.println(AnsiStyle.wrap(AnsiStyle.RED_BOLD,
+                        "[orchestrator] failed: " + ex.getMessage()));
+                out.flush();
+            }
+        }
+
         // 本轮 agent 收尾完成,刷新 lastTurnAt 给下次 idle 检测比对。
         lastTurnAt = Instant.now();
     }
@@ -283,6 +319,40 @@ public class ReplLoop {
                 "SuperBizAgent CLI · model=" + session.getCurrentModel() +
                         " · session=" + session.getSessionId() +
                         " · type /help"));
+        printResumablePlans();
         out.flush();
+    }
+
+    /**
+     * 启动时列出磁盘上 ACTIVE 状态的 plan（part5 §8.9 "进程崩溃重启:扫描 plan.json"）。
+     *
+     * <p>非阻塞 —— 只打印一行提示，由用户决定是否输入 {@code /resume <planId>}。
+     * 不在 @PostConstruct 做是因为 stdin 尚未被 JLine 接管，不应阻塞上下文初始化。
+     */
+    private void printResumablePlans() {
+        if (taskPlanRepository == null) return;
+        try {
+            List<TaskPlan> active = taskPlanRepository.listAllPlans().stream()
+                    .filter(p -> p.getStatus() == TaskPlanStatus.ACTIVE)
+                    .toList();
+            if (active.isEmpty()) return;
+            out.println(AnsiStyle.wrap(AnsiStyle.YELLOW_BOLD,
+                    "[resume] " + active.size() + " active plan(s) found on disk:"));
+            for (TaskPlan p : active) {
+                String paused = p.isPaused() ? " (paused)" : "";
+                String current = p.getCurrentTaskId() == null ? "" : "  current=" + p.getCurrentTaskId();
+                out.println(AnsiStyle.wrap(AnsiStyle.YELLOW,
+                        "  · " + p.getPlanId() + "  goal=" + truncate(p.getGoal(), 60) + paused + current));
+            }
+            out.println(AnsiStyle.wrap(AnsiStyle.GRAY_DIM,
+                    "  use /resume <planId> to adopt & resume, or /tasks to inspect"));
+        } catch (RuntimeException ex) {
+            log.warn("printResumablePlans failed: {}", ex.getMessage());
+        }
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return "";
+        return s.length() <= max ? s : s.substring(0, max) + "…";
     }
 }

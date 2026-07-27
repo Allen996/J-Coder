@@ -1,5 +1,8 @@
 package org.example.agent.context.memory;
 
+import org.example.agent.core.task.TaskPlan;
+import org.example.agent.core.task.TaskPlanStatus;
+import org.example.agent.core.task.persistence.TaskPlanRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,6 +37,7 @@ class MemoryPackageTest {
     private LongTermStore longTermStore;
     private MidTermStore midTermStore;
     private MemoryIndex memoryIndex;
+    private TaskPlanRepository taskPlanRepository;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -41,6 +45,8 @@ class MemoryPackageTest {
         longTermStore = new LongTermStore(tempDir.resolve("Nico.md"));
         memoryIndex = new MemoryIndex(tempDir.resolve("MEMORY.md"));
         midTermStore = new MidTermStore(tempDir.resolve(".agent/sessions"));
+        taskPlanRepository = new TaskPlanRepository(tempDir.resolve(".agent/tasks"));
+        taskPlanRepository.init();
     }
 
     @AfterEach
@@ -183,7 +189,7 @@ class MemoryPackageTest {
         Files.writeString(sessionsRoot.resolve("s-1/mid-term.md"), "fake");
 
         MemoryIndexSynchronizer sync = new MemoryIndexSynchronizer(
-                memoryIndex, longTermStore, midTermStore, null);
+                memoryIndex, longTermStore, midTermStore, null, taskPlanRepository);
         sync.syncKnownPaths();
         int sizeAfterFirst = memoryIndex.loadOrEmpty().size();
 
@@ -197,8 +203,53 @@ class MemoryPackageTest {
                 .anyMatch(e -> e.getPath().equals(".agent/sessions/s-1/short-term.md"))).isTrue();
     }
 
-    // ============ FlashMemorySummarizer heuristics ============
+    @Test
+    void memoryIndexSynchronizerTracksTaskPlanLifecycle() throws Exception {
+        TaskPlan plan = TaskPlan.builder()
+                .planId("plan-1")
+                .goal("implement feature")
+                .sessionId("s-1")
+                .status(TaskPlanStatus.ACTIVE)
+                .subtaskIds(List.of())
+                .edges(List.of())
+                .build();
+        taskPlanRepository.savePlan(plan);
 
+        MemoryIndexSynchronizer sync = new MemoryIndexSynchronizer(
+                memoryIndex, longTermStore, midTermStore, null, taskPlanRepository);
+        sync.notePlan(plan.getPlanId());
+
+        assertThat(memoryIndex.loadOrEmpty()).anyMatch(e ->
+                e.getPath().equals(".agent/tasks/plan-1/plan.json"));
+        assertThat(Files.readString(memoryIndex.path()))
+                .contains("plan-1 任务计划");
+
+        sync.removePlan(plan.getPlanId());
+
+        assertThat(memoryIndex.loadOrEmpty()).noneMatch(e ->
+                e.getPath().equals(".agent/tasks/plan-1/plan.json"));
+        assertThat(Files.readString(memoryIndex.path()))
+                .doesNotContain("plan-1 任务计划");
+    }
+    @Test
+    void memoryIndexSynchronizerScansExistingActivePlanWithoutSessions() {
+        TaskPlan plan = TaskPlan.builder()
+                .planId("plan-existing")
+                .goal("recover task")
+                .sessionId("s-2")
+                .status(TaskPlanStatus.ACTIVE)
+                .subtaskIds(List.of())
+                .edges(List.of())
+                .build();
+        taskPlanRepository.savePlan(plan);
+
+        MemoryIndexSynchronizer sync = new MemoryIndexSynchronizer(
+                memoryIndex, longTermStore, midTermStore, null, taskPlanRepository);
+        sync.syncKnownPaths();
+
+        assertThat(memoryIndex.loadOrEmpty()).anyMatch(e ->
+                e.getPath().equals(".agent/tasks/plan-existing/plan.json"));
+    }
     @Test
     void flashSummarizerFallsBackToHeuristicWhenNoModel() {
         FlashMemorySummarizer summarizer = new FlashMemorySummarizer(null); // 无 ChatModel
@@ -262,7 +313,7 @@ class MemoryPackageTest {
                 new org.example.agent.context.session.SessionMessageStore(tempDir.resolve(".agent/sessions")),
                 stub,
                 new PendingLongTermCandidates(),
-                new MemoryIndexSynchronizer(memoryIndex, longTermStore, midTermStore, null),
+                new MemoryIndexSynchronizer(memoryIndex, longTermStore, midTermStore, null, taskPlanRepository),
                 1, 2);
         m.setActiveSessionId("s1");
         int first = m.tick();
@@ -290,7 +341,7 @@ class MemoryPackageTest {
 
         LongTermMaintainer m = new LongTermMaintainer(
                 sessionStore, stub, new PendingLongTermCandidates(),
-                new MemoryIndexSynchronizer(memoryIndex, longTermStore, midTermStore, null),
+                new MemoryIndexSynchronizer(memoryIndex, longTermStore, midTermStore, null, taskPlanRepository),
                 1, 2);
         m.setActiveSessionId(sid);
 

@@ -113,7 +113,7 @@ public class MemoryIndex {
         fm.put("capacity", String.valueOf(lruCapacity));
         StringBuilder body = new StringBuilder();
         body.append("# memory_index\n");
-        body.append("下面是当前活跃的记忆条目（LRU ").append(lruCapacity).append("）。过期文件不删除，仅从索引移除。\n\n");
+        body.append("# 下面是当前活跃的记忆条目（LRU ").append(lruCapacity).append("）。过期文件不删除，仅从索引移除。\n\n");
         for (IndexEntry e : cache.get()) {
             body.append("- ").append(e.toLine()).append("\n");
         }

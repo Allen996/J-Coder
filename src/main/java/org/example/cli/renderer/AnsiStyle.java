@@ -36,6 +36,7 @@ public final class AnsiStyle {
     private static final String FG_GREEN = "[32m";
     private static final String FG_RED = "[31m";
     private static final String FG_CYAN = "[36m";
+    private static final String FG_MAGENTA = "[35m";
 
     /** 灰色 + dim —— ThoughtEvent */
     public static final String GRAY_DIM = FG_GRAY + DIM;
@@ -47,12 +48,20 @@ public final class AnsiStyle {
     public static final String WHITE = FG_WHITE;
     /** 绿色 + bold —— FinishEvent FINISH */
     public static final String GREEN_BOLD = FG_GREEN + BOLD;
+    /** 绿色 —— SubTaskCompleted */
+    public static final String GREEN = FG_GREEN;
+    /** 红色 —— SubTaskFailed */
+    public static final String RED = FG_RED;
     /** 红色 + bold —— FinishEvent 非 FINISH / LoopErrorEvent */
     public static final String RED_BOLD = FG_RED + BOLD;
     /** 黄色 + bold —— 用户授权提示 */
     public static final String YELLOW_BOLD_HIGHLIGHT = FG_YELLOW + BOLD;
     /** 青色 + bold —— prompt dump 段头 */
     public static final String CYAN_BOLD = FG_CYAN + BOLD;
+    /** 品红 + bold —— PlanFinished */
+    public static final String MAGENTA_BOLD = FG_MAGENTA + BOLD;
+    /** 青色 —— VerifyStarted */
+    public static final String CYAN = FG_CYAN;
 
     /**
      * 用 ANSI 样式包裹文本，自动追加 RESET。

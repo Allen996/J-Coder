@@ -73,7 +73,8 @@ class ContextRuntimeWiringTest {
                 dynamicLayer,
                 new MidTermStore(),
                 new LongTermStore(),
-                new MemoryIndex());
+                new MemoryIndex(),
+                null);
         SideEffectTracker sideEffectTracker = new NoOpSideEffectTracker();
         ObjectProvider<ToolCallbackProvider> toolProvider =
                 new StaticListableBeanFactory().getBeanProvider(ToolCallbackProvider.class);

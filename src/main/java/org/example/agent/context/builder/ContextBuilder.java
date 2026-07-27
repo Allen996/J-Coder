@@ -52,6 +52,7 @@ public class ContextBuilder {
     private final MidTermStore midTermStore;
     private final LongTermStore longTermStore;
     private final MemoryIndex memoryIndex;
+    private final org.example.agent.core.task.context.TaskPlanContextAssembler taskPlanAssembler;
 
     @org.springframework.beans.factory.annotation.Autowired
     public ContextBuilder(ContextBudgetPolicy policy,
@@ -61,7 +62,8 @@ public class ContextBuilder {
                           DynamicLayer dynamicLayer,
                           MidTermStore midTermStore,
                           LongTermStore longTermStore,
-                          MemoryIndex memoryIndex) {
+                          MemoryIndex memoryIndex,
+                          org.example.agent.core.task.context.TaskPlanContextAssembler taskPlanAssembler) {
         this.policy = policy == null ? ContextBudgetPolicy.defaultPolicy() : policy;
         this.sessionStore = sessionStore;
         this.compressor = compressor == null ? new ConversationCompressor() : compressor;
@@ -70,6 +72,7 @@ public class ContextBuilder {
         this.midTermStore = midTermStore;
         this.longTermStore = longTermStore;
         this.memoryIndex = memoryIndex;
+        this.taskPlanAssembler = taskPlanAssembler;
     }
 
     /** 构造一个无 Spring 依赖的最小 builder（用于测试 / 单装配场景）。 */
@@ -78,7 +81,8 @@ public class ContextBuilder {
                                           ConversationCompressor compressor) {
         return new ContextBuilder(policy, sessionStore, compressor,
                 new StaticLayer(), new DynamicLayer(),
-                new MidTermStore(), new LongTermStore(), new MemoryIndex());
+                new MidTermStore(), new LongTermStore(), new MemoryIndex(),
+                null);
     }
 
     /** 装配上下文。失败抛 {@link ContextOverflowException}。 */
@@ -307,6 +311,13 @@ public class ContextBuilder {
 
         // 5. ephemeral —— 每个 step 重建清理；本 class 不写，step 进入时由 step observer 写入
         dynamicLayer.put(ContextKey.EPHEMERAL, ContextEntry.empty(ContextKey.EPHEMERAL));
+
+        // 6. task_plan —— 有 active plan 时注入摘要（part5 §8.8）
+        if (taskPlanAssembler != null) {
+            taskPlanAssembler.assemble(dynamicLayer);
+        } else {
+            dynamicLayer.put(ContextKey.TASK_PLAN, ContextEntry.empty(ContextKey.TASK_PLAN));
+        }
     }
 
     static String renderMessagesAsText(List<Message> messages) {
