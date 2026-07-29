@@ -5,6 +5,7 @@ import org.springframework.boot.Banner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.context.ConfigurableApplicationContext;
 
 /**
@@ -24,6 +25,11 @@ import org.springframework.context.ConfigurableApplicationContext;
         "org.example.agent.core",
         "org.example.agent.tool",
         "org.example.agent.context"
+})
+@ConfigurationPropertiesScan(basePackages = {
+        "org.example.cli",
+        "org.example.agent.core",
+        "org.example.agent.tool"
 })
 public class Main {
 

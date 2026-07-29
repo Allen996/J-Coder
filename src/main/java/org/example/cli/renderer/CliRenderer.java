@@ -44,12 +44,14 @@ public class CliRenderer implements ReActLoopObserver {
 
     private final SessionState session;
     private final AgentRuntime runtime;
+    private final StatusLine statusLine;
 
     private final BlockingQueue<String> renderQueue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
 
-    public CliRenderer(SessionState session, @Lazy AgentRuntime runtime) {
+    public CliRenderer(SessionState session, @Lazy AgentRuntime runtime, StatusLine statusLine) {
         this.session = session;
         this.runtime = runtime;
+        this.statusLine = statusLine;
     }
 
     @PostConstruct
@@ -87,8 +89,17 @@ public class CliRenderer implements ReActLoopObserver {
     // ============== Observer 实现 ==============
 
     @Override
+    public void onPromptBuilt(java.util.List<org.springframework.ai.chat.messages.Message> messages, int stepIndex) {
+        // LLM 调用即将发起 —— 进入 Thinking 阶段。onThought 触发时 finish。
+        if (statusLine != null) {
+            statusLine.begin(StatusLine.Phase.THINKING, null);
+        }
+    }
+
+    @Override
     public void onThought(ThoughtEvent event, ReActLoopSignal signal) {
         session.addTokens(event.getPromptTokens(), event.getCompletionTokens());
+        if (statusLine != null) statusLine.finish();
         String text = event.getThoughtText();
         if (text == null) return;
         // 非流式：ThoughtEvent 携带的就是模型完整回答 —— 逐行白文输出，不截断、不加前缀。
@@ -117,13 +128,16 @@ public class CliRenderer implements ReActLoopObserver {
 
     @Override
     public void onActionInvoked(org.example.agent.core.event.ActionInvokedEvent event, ReActLoopSignal signal) {
-        // status 字段当前为空（ActionInvokedEvent 只携带 toolName），渲染时省去 status 显示
-        enqueue(AnsiStyle.wrap(AnsiStyle.YELLOW_BOLD,
-                String.format("⚙ %s → invoked", event.getToolName())));
+        // 工具调用发起 —— 进入 Tool_calling 阶段，由 onObservation finish。
+        // 不再 enqueue "→ invoked" 行，避免和状态行重复。
+        if (statusLine != null) {
+            statusLine.begin(StatusLine.Phase.TOOL_CALLING, event.getToolName());
+        }
     }
 
     @Override
     public void onObservation(ObservationEvent event, ReActLoopSignal signal) {
+        if (statusLine != null) statusLine.finish();
         String text = event.getObservationText();
         if (text == null) text = "";
         int lineCount = text.isEmpty() ? 0 : text.split("\n", -1).length;
@@ -144,12 +158,14 @@ public class CliRenderer implements ReActLoopObserver {
 
     @Override
     public void onLoopBudgetExceeded(LoopBudgetEvent event, ReActLoopSignal signal) {
+        if (statusLine != null) statusLine.finish();
         enqueue(AnsiStyle.wrap(AnsiStyle.YELLOW,
                 String.format("⚠ step %d/%d", event.getStepsTaken(), event.getMaxSteps())));
     }
 
     @Override
     public void onTokenBudgetExceeded(TokenBudgetEvent event, ReActLoopSignal signal) {
+        if (statusLine != null) statusLine.finish();
         long max = event.getMaxTokens() <= 0 ? 1 : event.getMaxTokens();
         long pct = (event.getTokensUsed() * 100L) / max;
         enqueue(AnsiStyle.wrap(AnsiStyle.YELLOW,
@@ -158,6 +174,7 @@ public class CliRenderer implements ReActLoopObserver {
 
     @Override
     public void onFinish(FinishEvent event, ReActLoopSignal signal) {
+        if (statusLine != null) statusLine.finish();
         String answer = event.getFinalAnswer();
         // 注意：模型的完整回答已在 onThought 里全量打印，
         // 这里不再重复打印 finalAnswer，避免双重输出。
@@ -173,6 +190,7 @@ public class CliRenderer implements ReActLoopObserver {
 
     @Override
     public void onError(LoopErrorEvent event, ReActLoopSignal signal) {
+        if (statusLine != null) statusLine.finish();
         enqueue(AnsiStyle.wrap(AnsiStyle.RED_BOLD,
                 String.format("✗ %s", event.getMessage() == null ? "error" : event.getMessage())));
     }

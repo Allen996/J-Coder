@@ -155,4 +155,40 @@ class InMemorySideEffectTrackerTest {
                 "每条以两空格-缩进开头; actual=" + rendered);
         assertTrue(rendered.contains("(restored 4 bytes)"));
     }
+
+    @Test
+    @DisplayName("并发路径下 recordFileChange 是 no-op(未 bind 视为静默丢弃)")
+    void concurrent_recordFileChange_onUnboundThreads_isSilentNoOp() throws Exception {
+        // 设计约束:
+        //   * write 工具跑同一线程 → 串行,不存在跨线程 push
+        //   * bind() 写 ThreadLocal,worker 线程没继承 → recordFileChange 在 worker 上是 no-op
+        //   * 防"误以为 push 被丢":用这个测试钉死语义,别让后人以为这是 bug
+        int threads = 8;
+        int perThread = 50;
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        try {
+            java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+            java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+            for (int t = 0; t < threads; t++) {
+                final int tid = t;
+                futures.add(pool.submit(() -> {
+                    try { start.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                    for (int i = 0; i < perThread; i++) {
+                        Path f = tmp.resolve("file-" + tid + "-" + i + ".txt");
+                        // worker 线程没继承 main 的 ThreadLocal → 静默 no-op
+                        tracker.recordFileChange("writeFile", f.toString(),
+                                ("orig-" + tid + "-" + i).getBytes(StandardCharsets.UTF_8));
+                    }
+                }));
+            }
+            start.countDown();
+            for (var f : futures) f.get(10, java.util.concurrent.TimeUnit.SECONDS);
+
+            RollbackSummary sum = tracker.rollbackAll();
+            assertEquals(0, sum.rolledCount(),
+                    "worker 线程未 bind → 不应有任何入栈;若非 0 说明 ThreadLocal 语义被破坏");
+        } finally {
+            pool.shutdown();
+        }
+    }
 }

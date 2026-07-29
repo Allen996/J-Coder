@@ -12,24 +12,48 @@ package org.example.agent.tool.spi;
  * @param reversible    调用失败时是否可由 SideEffectTracker 自动回滚
  * @param commandGate   是否走 CommandGate（仅 shell 类工具为 true）
  * @param description   人类可读的简短描述，写入 prompt / 日志
+ * @param timeoutMs     单次调用超时（毫秒）。{@code 0} 表示沿用 {@code cli.tool.default-timeout-ms}
+ * @param cacheable     是否可外置到磁盘缓存（recall_tool_result 召回）
+ * @param readonly      是否无副作用。readonly 工具可在 ReActLoop 中并发分发
  */
 public record ToolDescriptor(
         String name,
         ToolRisk risk,
         boolean reversible,
         boolean commandGate,
-        String description
+        String description,
+        long timeoutMs,
+        boolean cacheable,
+        boolean readonly
 ) {
 
+    /** 默认 LOW：不需授权、不走命令闸、不写盘、可外置、可并发。 */
     public static ToolDescriptor low(String name, String description) {
-        return new ToolDescriptor(name, ToolRisk.LOW, false, false, description);
+        return new ToolDescriptor(name, ToolRisk.LOW, false, false, description,
+                0L, true, true);
     }
 
+    /** LOW 但不可外置缓存（如 check_command_exists,结果依赖 PATH 状态）。可并发。 */
+    public static ToolDescriptor lowNonCacheable(String name, String description) {
+        return new ToolDescriptor(name, ToolRisk.LOW, false, false, description,
+                0L, false, true);
+    }
+
+    /** 默认 MEDIUM：写工具,不可外置、不可并发。{@code reversible} 由调用方指定。 */
     public static ToolDescriptor medium(String name, boolean reversible, String description) {
-        return new ToolDescriptor(name, ToolRisk.MEDIUM, reversible, false, description);
+        return new ToolDescriptor(name, ToolRisk.MEDIUM, reversible, false, description,
+                0L, false, false);
     }
 
+    /** HIGH：shell 类,不走外置缓存、不可并发。 */
     public static ToolDescriptor high(String name, String description) {
-        return new ToolDescriptor(name, ToolRisk.HIGH, false, true, description);
+        return new ToolDescriptor(name, ToolRisk.HIGH, false, true, description,
+                0L, false, false);
+    }
+
+    /** 自定义超时的便捷方法。 */
+    public ToolDescriptor withTimeout(long timeoutMs) {
+        return new ToolDescriptor(name, risk, reversible, commandGate, description,
+                timeoutMs, cacheable, readonly);
     }
 }

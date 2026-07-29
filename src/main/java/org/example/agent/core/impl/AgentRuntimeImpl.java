@@ -80,6 +80,10 @@ public class AgentRuntimeImpl implements AgentRuntime {
     private final ContextAwareAgentBudgetFactory budgetFactory;
     private final MemoryTurnHook memoryTurnHook;
     private final LongTermMaintainer longTermMaintainer;
+    private final org.example.agent.tool.cache.ToolResultStore resultStore;
+    private final org.example.agent.tool.config.CliToolProperties cliToolProperties;
+    private final org.example.agent.tool.spi.ToolDescriptorRegistry toolDescriptorRegistry;
+    private final ExecutorService toolExecutor;
 
     @Autowired
     public AgentRuntimeImpl(ChatModel chatModel,
@@ -91,10 +95,17 @@ public class AgentRuntimeImpl implements AgentRuntime {
                             SessionMessageStore sessionStore,
                             ContextAwareAgentBudgetFactory budgetFactory,
                             MemoryTurnHook memoryTurnHook,
-                            LongTermMaintainer longTermMaintainer) {
+                            LongTermMaintainer longTermMaintainer,
+                            org.example.agent.tool.cache.ToolResultStore resultStore,
+                            org.example.agent.tool.config.CliToolProperties cliToolProperties,
+                            org.example.agent.tool.spi.ToolDescriptorRegistry toolDescriptorRegistry,
+                            @org.springframework.beans.factory.annotation.Qualifier("toolExecutor")
+                            ExecutorService toolExecutor) {
         this(chatModel, toolGateway, toolCallbackProvider, sideEffectTracker,
                 contextBuilder, autoCompressionObserver, sessionStore,
-                budgetFactory, memoryTurnHook, longTermMaintainer, defaultBlockingExecutor());
+                budgetFactory, memoryTurnHook, longTermMaintainer, resultStore,
+                cliToolProperties, toolDescriptorRegistry, toolExecutor,
+                defaultBlockingExecutor());
     }
 
     /**
@@ -111,7 +122,7 @@ public class AgentRuntimeImpl implements AgentRuntime {
                             ExecutorService blockingExecutor) {
         this(chatModel, toolGateway, toolCallbackProvider, sideEffectTracker,
                 contextBuilder, autoCompressionObserver, sessionStore,
-                budgetFactory, null, null, blockingExecutor);
+                budgetFactory, null, null, null, null, null, null, blockingExecutor);
     }
 
     public AgentRuntimeImpl(ChatModel chatModel,
@@ -124,6 +135,10 @@ public class AgentRuntimeImpl implements AgentRuntime {
                             ContextAwareAgentBudgetFactory budgetFactory,
                             MemoryTurnHook memoryTurnHook,
                             LongTermMaintainer longTermMaintainer,
+                            org.example.agent.tool.cache.ToolResultStore resultStore,
+                            org.example.agent.tool.config.CliToolProperties cliToolProperties,
+                            org.example.agent.tool.spi.ToolDescriptorRegistry toolDescriptorRegistry,
+                            ExecutorService toolExecutor,
                             ExecutorService blockingExecutor) {
         this.chatModel = chatModel;
         this.toolGateway = toolGateway;
@@ -137,6 +152,10 @@ public class AgentRuntimeImpl implements AgentRuntime {
         this.longTermMaintainer = longTermMaintainer;
         this.registry = new ExecutionRegistry();
         this.blockingExecutor = blockingExecutor;
+        this.resultStore = resultStore;
+        this.cliToolProperties = cliToolProperties;
+        this.toolDescriptorRegistry = toolDescriptorRegistry;
+        this.toolExecutor = toolExecutor;
     }
 
     private List<ToolCallback> currentToolCallbacks() {
@@ -297,7 +316,8 @@ public class AgentRuntimeImpl implements AgentRuntime {
 
         DefaultReActLoopSignal signal = new DefaultReActLoopSignal();
         ReActLoop loop = new ReActLoop(executionId, chatModel, task, budget, toolGateway,
-                currentToolCallbacks(), sideEffectTracker, contextBuilder);
+                currentToolCallbacks(), sideEffectTracker, contextBuilder,
+                cliToolProperties, toolDescriptorRegistry, toolExecutor, resultStore);
         AgentExecutionRecord.Builder recordBuilder = AgentExecutionRecord.builder()
                 .executionId(executionId)
                 .task(task)

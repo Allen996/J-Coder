@@ -16,6 +16,8 @@ import org.example.cli.input.InputRouter;
 import org.example.cli.input.ShellPassthrough;
 import org.example.cli.renderer.AnsiStyle;
 import org.example.cli.renderer.CliRenderer;
+import org.example.cli.renderer.StartupBanner;
+import org.example.cli.renderer.StatusLine;
 import org.example.cli.renderer.TaskProgressRenderer;
 import org.example.cli.session.SessionState;
 import org.jline.reader.EndOfFileException;
@@ -58,6 +60,8 @@ public class ReplLoop {
     private static final String PROMPT_PRIMARY = "[1m[36m▌[0m ";
     private static final String PROMPT_CONTINUATION = "[36m›[0m ";
     private static final long POLL_INTERVAL_MS = 100L;
+    /** 状态行刷新间隔：250ms 在大多数终端下足够丝滑，又不闪。 */
+    private static final long STATUS_REFRESH_MS = 250L;
     /** part4 §7.8 / §7.2 "会话结束的空闲超时阈值 (默认 10 分钟)"。 */
     private static final long SESSION_IDLE_MINUTES = 10L;
 
@@ -72,6 +76,8 @@ public class ReplLoop {
     private final TaskProgressRenderer taskRenderer;
     private final TaskOrchestrator orchestrator;
     private final TaskPlanRepository taskPlanRepository;
+    private final StartupBanner banner;
+    private final StatusLine statusLine;
     private final MultiLineReader multiLineReader = new MultiLineReader();
     private final MemoryTurnHook memoryTurnHook;
 
@@ -93,7 +99,9 @@ public class ReplLoop {
                     TaskProgressRenderer taskRenderer,
                     TaskOrchestrator orchestrator,
                     TaskPlanRepository taskPlanRepository,
-                    MemoryTurnHook memoryTurnHook) {
+                    MemoryTurnHook memoryTurnHook,
+                    StartupBanner banner,
+                    StatusLine statusLine) {
         this.runtime = runtime;
         this.session = session;
         this.env = env;
@@ -106,6 +114,8 @@ public class ReplLoop {
         this.orchestrator = orchestrator;
         this.taskPlanRepository = taskPlanRepository;
         this.memoryTurnHook = memoryTurnHook;
+        this.banner = banner;
+        this.statusLine = statusLine;
         this.projectRoot = Paths.get("").toAbsolutePath();
         try {
             this.terminal = TerminalBuilder.builder().build();
@@ -265,6 +275,7 @@ public class ReplLoop {
                 .subscribe(
                         event -> { /* events routed through CliRenderer observer chain */ },
                         error -> {
+                            if (statusLine != null) statusLine.finish();
                             out.println(AnsiStyle.wrap(AnsiStyle.RED_BOLD, "stream error: " + error.getMessage()));
                             out.flush();
                             done.countDown();
@@ -272,9 +283,10 @@ public class ReplLoop {
                         done::countDown
                 );
 
-        // REPL 主线程轮询 renderer 队列，直到 stream 完成
+        // REPL 主线程轮询 renderer 队列 + 刷新状态行，直到 stream 完成
         while (done.getCount() > 0) {
             renderer.drainTo(out, POLL_INTERVAL_MS);
+            redrawStatusLine();
             try {
                 if (done.await(POLL_INTERVAL_MS, TimeUnit.MILLISECONDS)) {
                     break;
@@ -283,6 +295,10 @@ public class ReplLoop {
                 Thread.currentThread().interrupt();
                 break;
             }
+        }
+        // 强制清掉状态行,确保不会有残留
+        if (statusLine != null && statusLine.phase() != StatusLine.Phase.IDLE) {
+            statusLine.finish();
         }
         renderer.drainTo(out, 500);
 
@@ -315,10 +331,7 @@ public class ReplLoop {
     }
 
     private void printBanner() {
-        out.println(AnsiStyle.wrap(AnsiStyle.GREEN_BOLD,
-                "SuperBizAgent CLI · model=" + session.getCurrentModel() +
-                        " · session=" + session.getSessionId() +
-                        " · type /help"));
+        banner.print(out);
         printResumablePlans();
         out.flush();
     }
@@ -350,6 +363,25 @@ public class ReplLoop {
             log.warn("printResumablePlans failed: {}", ex.getMessage());
         }
     }
+
+    /**
+     * 重绘状态行：每 STATUS_REFRESH_MS 调一次。
+     * 用 CR + EL 把当前行清掉重画，避免堆积。
+     */
+    private void redrawStatusLine() {
+        if (statusLine == null) return;
+        if (statusLine.phase() == StatusLine.Phase.IDLE) return;
+        long nowMs = System.currentTimeMillis();
+        if (nowMs - lastStatusDrawMs < STATUS_REFRESH_MS) return;
+        lastStatusDrawMs = nowMs;
+        String line = statusLine.renderLine(java.time.Instant.ofEpochMilli(nowMs));
+        if (line == null || line.isEmpty()) return;
+        // CR + ESC[K 清掉当前行内容,然后写新行
+        out.print("\u001b[K");
+        out.println(line);
+        out.flush();
+    }
+    private volatile long lastStatusDrawMs = 0L;
 
     private static String truncate(String s, int max) {
         if (s == null) return "";

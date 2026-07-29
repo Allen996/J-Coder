@@ -7,6 +7,8 @@ import org.example.agent.core.event.RollbackEvent;
 import org.example.agent.core.observer.ReActLoopObserver;
 import org.example.agent.core.signal.ReActLoopSignal;
 import org.example.agent.tool.ToolExecutionException;
+import org.example.agent.tool.cache.ToolResultStore;
+import org.example.agent.tool.config.CliToolProperties;
 import org.example.agent.tool.failure.FailureClassifier;
 import org.example.agent.tool.failure.FailureKind;
 import org.example.agent.tool.failure.RetryPolicy;
@@ -21,6 +23,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -28,6 +32,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 /**
@@ -36,18 +45,17 @@ import java.util.stream.Collectors;
  * <p>ReActLoop 拿到 LLM 的 tool_calls 后，循环调用本类的 {@link #invoke}。
  * 本类负责：
  * <ol>
- *   <li>查 {@link ToolDescriptorRegistry} 拿元数据（risk / reversible）</li>
+ *   <li>查 {@link ToolDescriptorRegistry} 拿元数据（risk / reversible / timeoutMs / cacheable / readonly）</li>
  *   <li>发 {@link ActionPreCheckEvent}</li>
  *   <li>查 Spring AI {@link ToolCallback} by name</li>
  *   <li>发 {@link ActionInvokedEvent}</li>
- *   <li>用 {@link RetryPolicy} 包裹真实调用</li>
- *   <li>异常时用 {@link FailureClassifier} 分类，包装成结构化错误返回 LLM</li>
+ *   <li>用 {@link RetryPolicy} 包裹真实调用,内部通过 {@link CompletableFuture} + {@code toolExecutor} 施加超时</li>
+ *   <li>成功后将结果(若 cacheable)写入 {@link ToolResultStore},并在末尾追加 {@code [stored as #<id>]}</li>
+ *   <li>异常时用 {@link FailureClassifier} 分类,包装成结构化错误返回 LLM;若 LOGIC + reversible 则回滚</li>
  *   <li>发 {@link ObservationEvent}</li>
  * </ol>
  *
  * <p>沙箱校验（路径闸 / 命令闸）由 {@code @Tool} 方法自己调用，本类不做。
- * 理由：{@code @Tool} 方法直接接触路径 / 命令参数，校验就近做最自然；
- * 工具作者忘加的风险由 descriptor 的 risk 等级 + v2 授权 UI 兜底。
  */
 @Component
 public class ToolGateway {
@@ -59,12 +67,19 @@ public class ToolGateway {
     private final FailureClassifier classifier;
     private final RetryPolicy retryPolicy;
     private final SideEffectTracker sideEffects;
+    private final CliToolProperties properties;
+    private final ToolResultStore resultStore;
+    private final ExecutorService toolExecutor;
 
+    @Autowired
     public ToolGateway(ToolCallbackProvider toolCallbackProvider,
                        ToolDescriptorRegistry descriptorRegistry,
                        FailureClassifier classifier,
                        RetryPolicy retryPolicy,
-                       SideEffectTracker sideEffects) {
+                       SideEffectTracker sideEffects,
+                       CliToolProperties properties,
+                       ToolResultStore resultStore,
+                       @Qualifier("toolExecutor") ExecutorService toolExecutor) {
         this.callbacks = java.util.Arrays.stream(toolCallbackProvider.getToolCallbacks())
                 .collect(Collectors.toMap(
                         cb -> cb.getToolDefinition().name(),
@@ -77,6 +92,22 @@ public class ToolGateway {
         this.classifier = classifier;
         this.retryPolicy = retryPolicy;
         this.sideEffects = sideEffects;
+        this.properties = properties;
+        this.resultStore = resultStore;
+        this.toolExecutor = toolExecutor;
+    }
+
+    /**
+     * 向后兼容的测试用 5 参构造器。生产路径不会走到 —— Spring 注入 8 参版。
+     * 调用 invoke() 时 resultStore/toolExecutor 为 null 会 NPE,这是预期(测试不应走 invoke)。
+     */
+    public ToolGateway(ToolCallbackProvider toolCallbackProvider,
+                       ToolDescriptorRegistry descriptorRegistry,
+                       FailureClassifier classifier,
+                       RetryPolicy retryPolicy,
+                       SideEffectTracker sideEffects) {
+        this(toolCallbackProvider, descriptorRegistry, classifier, retryPolicy, sideEffects,
+                new CliToolProperties(), null, null);
     }
 
     public Optional<ToolCallback> lookup(String name) {
@@ -87,14 +118,6 @@ public class ToolGateway {
      * 执行一次工具调用。返回 LLM 看到的响应（成功时是工具输出，失败时是结构化错误摘要）。
      *
      * <p>不会向上抛异常 —— 所有失败都被翻译成结构化错误字符串。
-     *
-     * @param executionId 当前执行 id（写进事件）
-     * @param toolName    工具名（{@code @Tool.name} 或方法名）
-     * @param argsJson    LLM 传来的参数 JSON 字符串
-     * @param stepIndex   当前 step 序号（用于事件）
-     * @param signal      协作式终止信号
-     * @param observers   事件订阅者
-     * @return LLM 看到的响应
      */
     public String invoke(String executionId,
                          String toolName,
@@ -117,24 +140,89 @@ public class ToolGateway {
             return err;
         }
 
+        ToolDescriptor descriptor = descriptorRegistry.get(toolName).orElse(null);
+        long timeoutMs = resolveTimeoutMs(descriptor);
+
         Instant invokedAt = Instant.now();
         emitActionInvoked(executionId, invokedAt, stepIndex, toolName, signal, observers);
         long start = System.currentTimeMillis();
 
         try {
             String result = retryPolicy.execute(
-                    () -> cb.call(argsJson),
+                    () -> invokeWithTimeout(cb, argsJson, timeoutMs, toolName),
                     classifier,
                     RetryPolicy.DEFAULT_SLEEPER,
                     (attempt, kind, cause, sleepMs) ->
                             log.debug("tool={} retry attempt={} kind={} sleep={}ms cause={}",
                                     toolName, attempt, kind, sleepMs, cause.toString()));
             long ms = System.currentTimeMillis() - start;
-            emitObservation(executionId, stepIndex, toolName, ObservationEvent.Status.OK, result, ms, signal, observers);
-            return result;
+
+            // 成功 → 外置缓存(若 cacheable),并在末尾追加 #id
+            String annotated = appendStoredId(result, toolName, argsMap, executionId, descriptor);
+            emitObservation(executionId, stepIndex, toolName, ObservationEvent.Status.OK, annotated, ms, signal, observers);
+            return annotated;
         } catch (Throwable t) {
             long ms = System.currentTimeMillis() - start;
             return handleFailure(executionId, t, toolName, stepIndex, ms, argsMap, signal, observers);
+        }
+    }
+
+    /**
+     * 把 cb.call 包在 CompletableFuture 里,用 future.get(timeoutMs) 强制超时。
+     * 超时 → 抛 TimeoutException(由 FailureClassifier 判为 TRANSIENT,触发 RetryPolicy 重试)。
+     * 取消 → future.cancel(true) 试图中断可中断 IO;不可中断的会跑满 timeout。
+     */
+    private String invokeWithTimeout(ToolCallback cb, String argsJson, long timeoutMs, String toolName) throws Exception {
+        CompletableFuture<String> future = CompletableFuture.supplyAsync(
+                () -> cb.call(argsJson), toolExecutor);
+        try {
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException te) {
+            future.cancel(true);
+            // 包装为带 TIMEOUT 错误码的 ToolExecutionException,RetryPolicy 因 TRANSIENT 仍重试
+            // 最终 brief 会写 "[error: TIMEOUT]"(而不是 [error: IO_TRANSIENT])
+            throw new ToolExecutionException(
+                    ToolErrorCode.TIMEOUT,
+                    "tool " + toolName + " timed out after " + timeoutMs + "ms",
+                    "缩短操作或调整工具超时",
+                    FailureKind.TRANSIENT,
+                    te);
+        } catch (ExecutionException ee) {
+            // 拆包:让 FailureClassifier 看到真实异常类型
+            Throwable cause = ee.getCause();
+            throw (cause instanceof Exception ex) ? ex : new RuntimeException(cause);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw ie;
+        }
+    }
+
+    private long resolveTimeoutMs(ToolDescriptor descriptor) {
+        if (descriptor != null && descriptor.timeoutMs() > 0) {
+            return descriptor.timeoutMs();
+        }
+        return properties.defaultTimeoutMs();
+    }
+
+    /**
+     * 若工具结果可外置,同步写存储(单文件 < 几 ms),末尾追加 #id 提示 LLM。
+     * 失败不抛 —— 缓存是优化,不影响主路径。
+     */
+    private String appendStoredId(String result,
+                                  String toolName,
+                                  Map<String, Object> argsMap,
+                                  String executionId,
+                                  ToolDescriptor descriptor) {
+        if (descriptor == null || !descriptor.cacheable()) return result;
+        if (!properties.resultCache().enabled()) return result;
+        if (result == null) return null;
+        try {
+            String id = resultStore.save(toolName, argsMap, result, executionId, descriptor);
+            if (id == null) return result;
+            return result + "\n[stored as #" + id + "]";
+        } catch (Exception ex) {
+            log.warn("appendStoredId failed for tool={}: {}", toolName, ex.getMessage());
+            return result;
         }
     }
 
@@ -200,13 +288,6 @@ public class ToolGateway {
 
     /**
      * 给 LLM 看的错误摘要。包含 errorCode + 日志(5+15 采样) + 建议 + 触发本次调用的参数。
-     * 完整 stack trace 仍在 audit log。
-     *
-     * <p>LOGIC 失败 + 已回滚时: 在常规 [error: CODE] 之前插入 {@code [logic-rollback]} 头,
-     * 并多输出两段 {@code rolled-back:} 与 {@code action: re-plan from current state},
-     * 告诉 LLM 上一轮写入已被撤销,需要重新规划。
-     *
-     * <p>package-private 是为了同包测试直接调,无需反射 / Mockito。
      */
     String briefForLlm(ToolResult r, Map<String, Object> argsMap, RollbackSummary rollback) {
         if (r.error() == null) return r.content() == null ? "" : r.content();
@@ -232,19 +313,10 @@ public class ToolGateway {
         return sb.toString();
     }
 
-    /**
-     * 兼容旧签名 —— 不带 rollback 的 brief (PARAM/TRANSIENT 路径)。
-     * package-private 方便测试。
-     */
     String briefForLlm(ToolResult r, Map<String, Object> argsMap) {
         return briefForLlm(r, argsMap, null);
     }
 
-    /**
-     * 非对称头尾采样: 保留首 head 行 + 末 tail 行,中间用 "(省略 N 行)" 占位。
-     * 行数 <= head+tail 时原样返回(不画蛇添足)。
-     * package-private 是为了在同包测试里直接打桩验证行数 / 占位文本 / 头尾保留。
-     */
     static String sampleHeadTail(String text, int head, int tail) {
         if (text == null || text.isEmpty()) return "";
         if (head < 0 || tail < 0) return text;
@@ -355,8 +427,6 @@ public class ToolGateway {
     }
 
     private static Map<String, Object> parseArgs(String json) {
-        // 简单解析 —— Spring AI 内部会用 jsonschema 做严格解析，这里只需要给事件一个大致可读的视图
-        // 真正的类型转换由 ToolCallback 完成
         if (json == null || json.isBlank()) return Map.of();
         try {
             return new com.fasterxml.jackson.databind.ObjectMapper().readValue(json, Map.class);

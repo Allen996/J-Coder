@@ -8,8 +8,12 @@ import org.example.agent.core.observer.ReActLoopObserver;
 import org.example.agent.core.record.StepRecord;
 import org.example.agent.core.signal.ReActLoopSignal;
 import org.example.agent.core.task.AgentTask;
+import org.example.agent.tool.cache.ToolResultStore;
+import org.example.agent.tool.config.CliToolProperties;
 import org.example.agent.tool.gateway.ToolGateway;
 import org.example.agent.tool.rollback.SideEffectTracker;
+import org.example.agent.tool.spi.ToolDescriptor;
+import org.example.agent.tool.spi.ToolDescriptorRegistry;
 import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +33,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -49,9 +55,10 @@ import java.util.concurrent.atomic.AtomicLong;
  *         fullAnswer = assistant.getText()
  *         break
  *     messages.add(assistant)
- *     for each toolCall in assistant.getToolCalls():
- *         result = toolGateway.invoke(name, args, step, signal, observers)
- *         toolResponses.add(new ToolResponse(toolCall.id, name, result))
+ *     # 分桶:readonly 走并发;write 走串行(保留 SideEffectTracker 顺序语义)
+ *     readonlyCalls, writeCalls = partition(assistant.getToolCalls())
+ *     for writeCalls: toolGateway.invoke(serial)  → toolResponses
+ *     allOf([toolGateway.invoke(async) for readonlyCalls])  → toolResponses
  *     messages.add(new ToolResponseMessage(toolResponses))
  *     if signal.isTerminateRequested(): break
  * </pre>
@@ -65,6 +72,9 @@ public class ReActLoop {
     /** 兜底：单次执行最多调模型 16 次，防止 tool_call 互相调用导致的无限循环。 */
     private static final int MAX_MODEL_ITERATIONS = 16;
 
+    /** auto-inline 时扫描最近 N 条消息。3 轮 ≈ user + assistant + tool_response × 3。 */
+    private static final int AUTO_INLINE_SCAN_WINDOW = 6;
+
     private final String executionId;
     private final ChatModel chatModel;
     private final AgentTask task;
@@ -74,7 +84,12 @@ public class ReActLoop {
     private final List<ToolCallback> toolCallbacks;
     private final SideEffectTracker sideEffects;
     private final ContextBuilder contextBuilder;
+    private final CliToolProperties properties;
+    private final ToolDescriptorRegistry descriptorRegistry;
+    private final ExecutorService toolExecutor;
+    private final ToolResultStore resultStore;
 
+    /** 兼容入口:缺少新增强依赖(用于纯单元测试场景,不走 invoke 路径)。 */
     public ReActLoop(String executionId,
                      ChatModel chatModel,
                      AgentTask task,
@@ -82,9 +97,11 @@ public class ReActLoop {
                      ToolGateway toolGateway,
                      List<ToolCallback> toolCallbacks,
                      SideEffectTracker sideEffects) {
-        this(executionId, chatModel, task, budget, toolGateway, toolCallbacks, sideEffects, null);
+        this(executionId, chatModel, task, budget, toolGateway, toolCallbacks, sideEffects,
+                null, null, null, null, null);
     }
 
+    /** 兼容入口:带 ContextBuilder 但无增强依赖。 */
     public ReActLoop(String executionId,
                      ChatModel chatModel,
                      AgentTask task,
@@ -93,6 +110,23 @@ public class ReActLoop {
                      List<ToolCallback> toolCallbacks,
                      SideEffectTracker sideEffects,
                      ContextBuilder contextBuilder) {
+        this(executionId, chatModel, task, budget, toolGateway, toolCallbacks, sideEffects,
+                contextBuilder, null, null, null, null);
+    }
+
+    /** 完整构造器。Spring 生产路径走这里。 */
+    public ReActLoop(String executionId,
+                     ChatModel chatModel,
+                     AgentTask task,
+                     AgentBudget budget,
+                     ToolGateway toolGateway,
+                     List<ToolCallback> toolCallbacks,
+                     SideEffectTracker sideEffects,
+                     ContextBuilder contextBuilder,
+                     CliToolProperties properties,
+                     ToolDescriptorRegistry descriptorRegistry,
+                     ExecutorService toolExecutor,
+                     ToolResultStore resultStore) {
         this.executionId = executionId;
         this.chatModel = chatModel;
         this.task = task;
@@ -102,6 +136,10 @@ public class ReActLoop {
         this.toolCallbacks = toolCallbacks == null ? List.of() : toolCallbacks;
         this.sideEffects = sideEffects;
         this.contextBuilder = contextBuilder;
+        this.properties = properties;
+        this.descriptorRegistry = descriptorRegistry;
+        this.toolExecutor = toolExecutor;
+        this.resultStore = resultStore;
         log.info("executionId={} ReActLoop initialized with {} tool callbacks: {}",
                 executionId,
                 this.toolCallbacks.size(),
@@ -145,6 +183,9 @@ public class ReActLoop {
                 int promptStep = stepCounter.get() + 1;
                 emitPromptBuilt(observers, messages, promptStep, signal);
 
+                // Auto-inline:扫描最近消息里的 #<id> 占位符,尝试从外置存储召回并嵌入
+                autoInlinePlaceholders(messages);
+
                 Prompt prompt = buildPrompt(messages);
                 ChatResponse response = chatModel.call(prompt);
                 if (response == null) {
@@ -168,7 +209,6 @@ public class ReActLoop {
                 int step = stepCounter.incrementAndGet();
                 lastStepStart.set(System.currentTimeMillis());
 
-                // 任何模型输出都先 emit ThoughtEvent（即使后面有 tool_calls）
                 emitThought(observers, buildThoughtEvent(at, step, text, promptTokens, completionTokens), signal);
                 records.add(StepRecord.builder()
                         .stepIndex(step)
@@ -180,7 +220,6 @@ public class ReActLoop {
                         .tokensConsumed(promptTokens + completionTokens)
                         .build());
 
-                // 路径分叉：tool_calls vs 最终回答
                 log.info("executionId={} model response: hasToolCalls={} toolCallCount={} text={}",
                         executionId,
                         assistant.hasToolCalls(),
@@ -194,40 +233,23 @@ public class ReActLoop {
                     break;
                 }
 
-                // 把 AssistantMessage（含 tool_calls）加进历史，模型下一轮能看见自己刚才要调什么
                 messages.add(assistant);
                 turnMessages.add(assistant);
 
-                List<ToolResponseMessage.ToolResponse> toolResponses = new ArrayList<>();
-                for (AssistantMessage.ToolCall tc : assistant.getToolCalls()) {
-                    if (signal.isTerminateRequested()) {
-                        break;
-                    }
-                    String result = toolGateway.invoke(
-                            executionId, tc.name(), tc.arguments(), step, signal, observers);
-                    toolResponses.add(new ToolResponseMessage.ToolResponse(
-                            tc.id(), tc.name(), result == null ? "" : result));
-                }
+                List<ToolResponseMessage.ToolResponse> toolResponses =
+                        dispatchToolCalls(assistant.getToolCalls(), executionId, step, signal, observers);
                 if (!toolResponses.isEmpty()) {
                     ToolResponseMessage toolMessage = ToolResponseMessage.builder()
                             .responses(toolResponses)
                             .build();
                     messages.add(toolMessage);
                     turnMessages.add(toolMessage);
-
-                    // TODO(v2): 上下文窗口压缩 —— 当出现 LOGIC + rollback 时,本轮 (Assistant + ToolResponse)
-                    // 已被标记为"已撤销的历史",下一轮 prompt 应当把它折叠成单行摘要,而不是原样塞进 messages。
-                    // 触发现条件: toolResponses 里只要有一个状态由 ToolGateway 回包成
-                    // [logic-rollback] 头,就调用 ContextCompressionHook.compressAfterRollback(messages, ...)
-                    // 把它压成一个 ≤ N token 的 "rollback summary" 行塞回去。
-                    // 当前 v1 简化:不压缩,完整历史会一直累积直到 budget 上限触发 FINISH。
                 }
             }
         } catch (Exception ex) {
             log.error("executionId={} call failed", executionId, ex);
             throw new IllegalStateException("ChatModel.call failed: " + ex.getMessage(), ex);
         } finally {
-            // 出口清理 —— 即便发生异常也不留 orphan session
             sideEffects.clear();
         }
 
@@ -237,10 +259,141 @@ public class ReActLoop {
                 Collections.unmodifiableList(new ArrayList<>(turnMessages)));
     }
 
+    /**
+     * 分桶 + 并发分发工具调用:
+     * <ul>
+     *   <li>readonly 工具 → CompletableFuture 并发(若 cli.tool.parallel=true 且 ≥2 个)</li>
+     *   <li>write 工具 → 串行(保留 SideEffectTracker 顺序语义)</li>
+     * </ul>
+     *
+     * <p>toolExecutor 为 null 时(测试路径)全部串行 —— 旧行为。
+     */
+    private List<ToolResponseMessage.ToolResponse> dispatchToolCalls(
+            List<AssistantMessage.ToolCall> calls,
+            String executionId,
+            int step,
+            ReActLoopSignal signal,
+            List<ReActLoopObserver> observers) {
+
+        List<ToolResponseMessage.ToolResponse> toolResponses = new ArrayList<>(calls.size());
+
+        List<AssistantMessage.ToolCall> writeCalls = new ArrayList<>();
+        List<AssistantMessage.ToolCall> readonlyCalls = new ArrayList<>();
+        for (AssistantMessage.ToolCall tc : calls) {
+            if (isReadonly(tc.name())) {
+                readonlyCalls.add(tc);
+            } else {
+                writeCalls.add(tc);
+            }
+        }
+
+        // 写工具一律串行(顺序语义)
+        for (AssistantMessage.ToolCall tc : writeCalls) {
+            if (signal.isTerminateRequested()) break;
+            String result = toolGateway.invoke(executionId, tc.name(), tc.arguments(), step, signal, observers);
+            toolResponses.add(new ToolResponseMessage.ToolResponse(
+                    tc.id(), tc.name(), result == null ? "" : result));
+        }
+
+        // 只读工具:开关关 / <2 个 / toolExecutor 缺失 → 串行
+        boolean parallel = properties != null && properties.parallel()
+                && toolExecutor != null
+                && readonlyCalls.size() > 1;
+        if (!parallel) {
+            for (AssistantMessage.ToolCall tc : readonlyCalls) {
+                if (signal.isTerminateRequested()) break;
+                String result = toolGateway.invoke(executionId, tc.name(), tc.arguments(), step, signal, observers);
+                toolResponses.add(new ToolResponseMessage.ToolResponse(
+                        tc.id(), tc.name(), result == null ? "" : result));
+            }
+            return toolResponses;
+        }
+
+        // 并发路径
+        log.debug("executionId={} dispatching {} readonly tool calls in parallel", executionId, readonlyCalls.size());
+        List<CompletableFuture<ToolResponseMessage.ToolResponse>> futures = new ArrayList<>(readonlyCalls.size());
+        for (AssistantMessage.ToolCall tc : readonlyCalls) {
+            futures.add(CompletableFuture.supplyAsync(
+                    () -> new ToolResponseMessage.ToolResponse(
+                            tc.id(), tc.name(),
+                            toolGateway.invoke(executionId, tc.name(), tc.arguments(), step, signal, observers)),
+                    toolExecutor));
+        }
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                    .join();   // 单个失败由 toolGateway.invoke 内部翻译为错误 brief,future 仍正常完成
+        } catch (Exception ex) {
+            log.warn("executionId={} parallel dispatch join failed: {}", executionId, ex.getMessage());
+        }
+        for (CompletableFuture<ToolResponseMessage.ToolResponse> f : futures) {
+            try {
+                toolResponses.add(f.join());
+            } catch (Exception ex) {
+                // 兜底:future 异常不应出现(toolGateway.invoke 不抛),但出现时不污染整体
+                log.warn("executionId={} parallel future join error: {}", executionId, ex.getMessage());
+            }
+        }
+        return toolResponses;
+    }
+
+    /** 工具是否 readonly(可在 ReActLoop 中并发分发)。未知工具默认写语义(串行)。 */
+    private boolean isReadonly(String toolName) {
+        if (descriptorRegistry == null) return false;
+        return descriptorRegistry.get(toolName)
+                .map(ToolDescriptor::readonly)
+                .orElse(false);
+    }
+
+    /**
+     * 扫描 messages 末尾 N 条 user/assistant 文本中的 {@code #<id>} 占位符,
+     * 尝试从外置存储召回并 inline,直到预算耗尽。
+     * 预算耗尽后剩余 id 改 inline 元数据提示。
+     *
+     * <p>变更通过追加一个 SystemMessage 体现(沿用 ConversationCompressor 的同模式)。
+     */
+    private void autoInlinePlaceholders(List<Message> messages) {
+        if (properties == null || resultStore == null) return;
+        if (!properties.resultCache().enabled()) return;
+        int budget = properties.resultCache().autoInlineByteBudget();
+        if (budget <= 0) return;
+
+        int scanFrom = Math.max(0, messages.size() - AUTO_INLINE_SCAN_WINDOW);
+        StringBuilder scanned = new StringBuilder();
+        for (int i = scanFrom; i < messages.size(); i++) {
+            Message m = messages.get(i);
+            if (m instanceof UserMessage um && um.getText() != null) {
+                scanned.append(um.getText()).append('\n');
+            } else if (m instanceof AssistantMessage am && am.getText() != null) {
+                scanned.append(am.getText()).append('\n');
+            }
+        }
+        List<String> ids = resultStore.scanIds(scanned.toString());
+        if (ids.isEmpty()) return;
+
+        List<String> inlined = new ArrayList<>();
+        int used = 0;
+        for (String id : ids) {
+            ToolResultStore.RecallResult rec = resultStore.recall(id, null, null, null);
+            if (rec instanceof ToolResultStore.RecallResult.Ok ok) {
+                int size = ok.content() == null ? 0 : ok.content().length();
+                if (used + size <= budget) {
+                    inlined.add("#" + id + ":\n" + ok.content());
+                    used += size;
+                } else {
+                    inlined.add(resultStore.metadataHint(id));
+                }
+            } else {
+                // EXPIRED / STALE_REMOVED / NOT_FOUND / INVALID —— 跳过,不要污染 prompt
+                log.debug("autoInline skip id={} reason={}", id, rec.getClass().getSimpleName());
+            }
+        }
+        if (inlined.isEmpty()) return;
+        messages.add(new SystemMessage("[auto-recalled tool results]\n" + String.join("\n\n", inlined)));
+    }
+
     // ============== 内部 ==============
 
     private List<Message> buildInitialMessages(String input) {
-        // Part 3 改造：交给 ContextBuilder 三层装配；contextBuilder 为 null 时降级到 Part 1 模板。
         if (contextBuilder != null) {
             try {
                 ContextBuilder.BuiltContext built = contextBuilder.build(task, input);
@@ -250,17 +403,14 @@ public class ReActLoop {
                         built.getTotalTokens(), built.getDynamicReserved());
                 return new ArrayList<>(built.getMessages());
             } catch (ContextBuilder.ContextOverflowException ex) {
-                // 装配阶段已经超预算 —— 让 ReActLoop 进入下一轮立即被 TokenBudgetObserver 终结。
                 log.warn("executionId={} ContextBuilder overflow at build: used={} reserved={}",
                         executionId, ex.getUsed(), ex.getReserved());
-                // 仍要返回至少 [system, user] 否则 chatModel.call 会失败
                 List<Message> fallback = new ArrayList<>();
                 fallback.add(new SystemMessage("（上下文超限，无法继续）"));
                 fallback.add(new UserMessage(input));
                 return fallback;
             }
         }
-        // ---- 兜底 ----
         List<Message> msgs = new ArrayList<>();
         Map<String, Object> vars = new HashMap<>();
         if (task.getPromptVariables() != null) {
@@ -313,7 +463,6 @@ public class ReActLoop {
         }
     }
 
-    /** 派发 prompt-build 事件（part3.md 可观测增强），用于 /verbose 实时打印与 /context 当前快照。 */
     private void emitPromptBuilt(List<ReActLoopObserver> observers, List<Message> messages, int stepIndex, ReActLoopSignal s) {
         for (ReActLoopObserver o : observers) {
             try {

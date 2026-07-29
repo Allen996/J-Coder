@@ -10,12 +10,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 
 /**
  * v1 默认实现:内存里按 executionId 分桶,deque 模拟栈。
@@ -45,7 +45,7 @@ public class InMemorySideEffectTracker implements SideEffectTracker {
     public void bind(String executionId) {
         if (executionId == null) throw new IllegalArgumentException("executionId must not be null");
         CURRENT_EXECUTION.set(executionId);
-        sessions.computeIfAbsent(executionId, k -> new ArrayDeque<>());
+        sessions.computeIfAbsent(executionId, k -> new ConcurrentLinkedDeque<>());
         log.debug("SideEffectTracker bound executionId={}", executionId);
     }
 
@@ -72,7 +72,9 @@ public class InMemorySideEffectTracker implements SideEffectTracker {
             log.warn("executionId={} not bound in map, ignored record", exec);
             return;
         }
-        stack.push(new SideEffectRecord(toolName, path, preState));
+        stack.addFirst(new SideEffectRecord(toolName, path, preState));
+        // 注:ConcurrentLinkedDeque 没有 push,改用 addFirst 保留 LIFO 语义
+        // (bind/clear 由同一线程调用,但 recordFileChange 可能被并发线程触发,因此 deque 必须线程安全)
         log.debug("executionId={} tracked side effect: tool={} path={} preStateBytes={}",
                 exec, toolName, path, preState == null ? -1 : preState.length);
     }

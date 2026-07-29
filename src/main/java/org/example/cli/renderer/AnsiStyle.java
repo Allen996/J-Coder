@@ -1,5 +1,7 @@
 package org.example.cli.renderer;
 
+import java.time.Duration;
+
 /**
  * ANSI 颜色样式常量与包裹工具。
  *
@@ -26,17 +28,19 @@ public final class AnsiStyle {
 
     private AnsiStyle() {}
 
-    private static final String RESET = "[0m";
-    private static final String BOLD = "[1m";
-    private static final String DIM = "[2m";
+    private static final String ESC = "";
+    private static final String RESET = ESC + "[0m";
+    private static final String BOLD = ESC + "[1m";
+    private static final String DIM = ESC + "[2m";
+    private static final String ITALIC = ESC + "[3m";
 
-    private static final String FG_GRAY = "[90m";
-    private static final String FG_YELLOW = "[33m";
-    private static final String FG_WHITE = "[37m";
-    private static final String FG_GREEN = "[32m";
-    private static final String FG_RED = "[31m";
-    private static final String FG_CYAN = "[36m";
-    private static final String FG_MAGENTA = "[35m";
+    private static final String FG_GRAY = ESC + "[90m";
+    private static final String FG_YELLOW = ESC + "[33m";
+    private static final String FG_WHITE = ESC + "[37m";
+    private static final String FG_GREEN = ESC + "[32m";
+    private static final String FG_RED = ESC + "[31m";
+    private static final String FG_CYAN = ESC + "[36m";
+    private static final String FG_MAGENTA = ESC + "[35m";
 
     /** 灰色 + dim —— ThoughtEvent */
     public static final String GRAY_DIM = FG_GRAY + DIM;
@@ -62,6 +66,8 @@ public final class AnsiStyle {
     public static final String MAGENTA_BOLD = FG_MAGENTA + BOLD;
     /** 青色 —— VerifyStarted */
     public static final String CYAN = FG_CYAN;
+    /** 青色 + italic —— 状态行 Thinking */
+    public static final String CYAN_ITALIC = FG_CYAN + ITALIC;
 
     /**
      * 用 ANSI 样式包裹文本，自动追加 RESET。
@@ -69,5 +75,43 @@ public final class AnsiStyle {
     public static String wrap(String style, String text) {
         if (text == null) return "";
         return style + text + RESET;
+    }
+
+    /**
+     * 把 elapsed 格式化为人类可读字符串。
+     * <pre>
+     *   0      → "0.0s"
+     *   1.5s   → "1.5s"
+     *   59.9s  → "59.9s"
+     *   60s    → "1m00s"
+     *   125s   → "2m05s"
+     *   3725s  → "1h02m"
+     * </pre>
+     */
+    public static String elapsedFormat(Duration d) {
+        if (d == null) return "0.0s";
+        long totalSeconds = d.getSeconds();
+        if (totalSeconds < 60L) {
+            double seconds = d.toMillis() / 1000.0;
+            return String.format("%.1fs", seconds);
+        }
+        if (totalSeconds < 3600L) {
+            long minutes = totalSeconds / 60L;
+            long seconds = totalSeconds % 60L;
+            return String.format("%dm%02ds", minutes, seconds);
+        }
+        long hours = totalSeconds / 3600L;
+        long minutes = (totalSeconds % 3600L) / 60L;
+        return String.format("%dh%02dm", hours, minutes);
+    }
+
+    /**
+     * 截断字符串，超过 maxLen 时用 … 结尾。用于工具名等可能被滥用的输入。
+     */
+    public static String truncate(String s, int maxLen) {
+        if (s == null) return "";
+        if (maxLen <= 0) return "";
+        if (s.length() <= maxLen) return s;
+        return s.substring(0, Math.max(0, maxLen - 1)) + "…";
     }
 }
