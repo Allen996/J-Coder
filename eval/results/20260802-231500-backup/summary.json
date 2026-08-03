@@ -1,0 +1,29 @@
+{
+  "A_on": {
+    "rounds_observed": 10,
+    "compression_triggered_rounds": 3,
+    "compression_trigger_share": 0.3,
+    "avg_compression_ratio": 1.149997963754836,
+    "max_compression_ratio": 1.5,
+    "total_chars": 198422,
+    "estimated_total_tokens": 56692.0
+  },
+  "B_off": {
+    "rounds_observed": 0,
+    "compression_triggered_rounds": 0,
+    "compression_trigger_share": 0.0,
+    "avg_compression_ratio": 1.0,
+    "max_compression_ratio": 1.0,
+    "total_chars": 0,
+    "estimated_total_tokens": 0
+  },
+  "C_truncate": {
+    "rounds_observed": 0,
+    "compression_triggered_rounds": 0,
+    "compression_trigger_share": 0.0,
+    "avg_compression_ratio": 1.0,
+    "max_compression_ratio": 1.0,
+    "total_chars": 0,
+    "estimated_total_tokens": 0
+  }
+}

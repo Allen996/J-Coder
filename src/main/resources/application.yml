@@ -1,0 +1,47 @@
+spring:
+  main:
+    web-application-type: none
+    banner-mode: off
+  ai:
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:}
+      chat:
+        options:
+          model: ${DASHSCOPE_MODEL:qwen3.7-plus-2026-05-26}
+
+agent:
+  project-root: ${AGENT_PROJECT_ROOT:}
+  context:
+    # A_on eval 临时下调阈值,让 10 轮剧本能触发自动压缩;默认值是 0.8。
+    # 仅用于本次 eval,不是产品默认值。
+    compression-threshold: 0.20
+    keep-recent-rounds: 8
+    
+  model:
+    http:
+      # 底层 OkHttp / HttpURLConnection socket 超时
+      connect-timeout-ms: 10000
+      read-timeout-ms: 180000
+      # 业务总时长封顶（Future.get），须 >= read-timeout-ms × (1 + retry) 才能让 socket 超时先生效
+      call-timeout-ms: 600000
+  memory:
+    api-key: ${AGENT_MEMORY_API_KEY:${DASHSCOPE_API_KEY:}}
+    model: ${AGENT_MEMORY_MODEL:qwen3.7-flash}
+    http:
+      connect-timeout-ms: 10000
+      read-timeout-ms: 60000
+    # Future.get 超时 = read-timeout + buffer,避免在 socket 超时前先 cancel
+    timeout-ms: 70000
+
+cli:
+  project-root: ${CLI_PROJECT_ROOT:}
+  tool:
+    parallel: true
+    default-timeout-ms: 60000
+    tool-executor-core: 0
+    tool-executor-max: 8
+    result-cache:
+      enabled: true
+      max-total-bytes: 524288000
+      ttl: PT168H
+      auto-inline-byte-budget: 16384

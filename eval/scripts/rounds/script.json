@@ -1,0 +1,115 @@
+{
+  "meta": {
+    "name": "J-Coder Context Compression Eval — 10 Rounds",
+    "anchor_goal": "把 NoteStore 改造为分层结构：ID 生成、时间戳、持久化接口三者独立；CommandHandler、Main 调用新接口而非老实现。",
+    "compression_threshold_chars": 8000,
+    "char_per_token_estimate": 3.5,
+    "modes": ["A_on", "B_off", "C_truncate"]
+  },
+  "rounds": [
+    {
+      "id": 1,
+      "title": "项目全景勘察",
+      "user_prompt": "请读取 eval/fixtures/mock-project 下的全部源文件、测试文件、pom.xml 与 README.md，然后输出一份'功能全景 + 可改进点清单'，清单不少于 6 条，每条要说明现状与改进方向。本次改造的总体目标是：把 NoteStore 改造为分层结构（ID 生成、时间戳、持久化接口三者独立）。请在最后一段显式重复一遍这个目标，作为本会话的锚点。",
+      "expected_outputs": ["project_overview", "improvement_list_at_least_6", "anchor_goal_restated"],
+      "force_long_output": true,
+      "min_output_chars": 1500,
+      "compression_expected": false
+    },
+    {
+      "id": 2,
+      "title": "跨文件依赖分析",
+      "user_prompt": "请再次读取全部源文件，输出'调用关系 + 数据流向 + 潜在耦合点'，每个调用关系附 2-3 句说明，每个耦合点列出风险与改进方向。结尾请明确'基于上述重构目标（NoteStore 分层化），下一步应优先解耦哪一处'。",
+      "expected_outputs": ["call_graph", "data_flow", "coupling_points", "next_step_aligned_with_anchor_goal"],
+      "force_long_output": true,
+      "min_output_chars": 1800,
+      "compression_expected": "likely"
+    },
+    {
+      "id": 3,
+      "title": "第一次重大重构（核心目标）",
+      "user_prompt": "请按上述重构目标，把 NoteStore 改造为分层结构：把 ID 生成抽成 IdGenerator 接口与默认实现；把时间戳抽成 Clock 接口与系统时钟实现；把持久化抽成 NoteRepository 接口与内存实现。完成后同步修改 CommandHandler 与 Main，确保它们调用新接口而非老实现。请先输出重构设计文档（不少于 4 段），再分多次编辑文件，每次编辑后贴出 diff 摘要。",
+      "expected_outputs": ["refactor_design_doc", "IdGenerator_interface", "Clock_interface", "NoteRepository_interface", "MemoryNoteRepository", "CommandHandler_updated", "Main_updated", "diff_summaries"],
+      "force_long_output": true,
+      "min_output_chars": 2200,
+      "compression_expected": true
+    },
+    {
+      "id": 4,
+      "title": "补充单元测试",
+      "user_prompt": "请为第 3 轮新增的 IdGenerator / Clock / NoteRepository 接口补全单元测试（覆盖默认实现与一个失败路径），执行 mvn -q test 并贴出完整输出。如果有失败，请原样贴出堆栈。",
+      "expected_outputs": ["IdGeneratorTest", "ClockTest", "NoteRepositoryTest", "mvn_test_output"],
+      "force_long_output": true,
+      "min_output_chars": 2000,
+      "compression_expected": true
+    },
+    {
+      "id": 5,
+      "title": "修复测试暴露的 Bug",
+      "user_prompt": "请根据上一轮失败用例定位并修复 CommandHandler 中的逻辑错误。要求：先复述失败用例、给出根因分析、列出 2-3 个候选修复方案、选定一个并说明理由、再执行修复、重新跑测试。这一轮是'修 bug 阶段，不是重新设计'，请保持第 3 轮的分层结构不动。",
+      "expected_outputs": ["failure_recap", "root_cause", "candidate_fixes", "chosen_fix_with_reason", "patch", "mvn_test_output"],
+      "force_long_output": true,
+      "min_output_chars": 1800,
+      "compression_expected": true
+    },
+    {
+      "id": 6,
+      "title": "新增子命令（search）",
+      "user_prompt": "请基于第 3 轮的分层结构，新增一个子命令 search <keyword>：在 NoteRepository 上新增 search 方法，在 CommandHandler 中注册该子命令，在 Main 的帮助信息里同步加入新命令，并在 NoteStoreTest 旁补一个 search 用例。完成后跑 mvn -q test。",
+      "expected_outputs": ["NoteRepository_search_added", "CommandHandler_search_dispatch", "Main_help_updated", "search_test_case", "mvn_test_output"],
+      "force_long_output": true,
+      "min_output_chars": 1600,
+      "compression_expected": true
+    },
+    {
+      "id": 7,
+      "title": "引入配置文件",
+      "user_prompt": "请把硬编码的默认值（默认笔记条数上限 = 100）移到配置文件 notes.properties 中，并允许通过 --max=N 命令行参数覆盖。配置文件查找路径：classpath → user home → cwd。要求：先输出配置文件设计、兼容性说明、迁移步骤，再实施修改，再跑测试。",
+      "expected_outputs": ["config_design", "compatibility_notes", "migration_steps", "config_loader", "override_flag", "mvn_test_output"],
+      "force_long_output": true,
+      "min_output_chars": 1800,
+      "compression_expected": true
+    },
+    {
+      "id": 8,
+      "title": "错误处理强化",
+      "user_prompt": "请为 CLI 增加统一错误处理：参数解析失败、文件 IO 异常、空输入、未知子命令都要走统一错误出口（带非零退出码）。修改 Main.java 让所有子命令走统一错误出口。注意不要破坏第 3 轮的分层结构。",
+      "expected_outputs": ["error_taxonomy", "unified_error_exit", "Main_refactored", "negative_tests", "mvn_test_output"],
+      "force_long_output": true,
+      "min_output_chars": 1800,
+      "compression_expected": true
+    },
+    {
+      "id": 9,
+      "title": "性能与代码风格整理",
+      "user_prompt": "请对整个工程做一轮'小优化 + 风格统一'：删除重复代码、统一命名（接口动词在前）、统一日志格式（使用 java.util.logging）。完成后跑测试，并输出一致性报告（哪些地方被改了、为什么）。",
+      "expected_outputs": ["consistency_report", "dedup_changes", "naming_alignment", "logging_unified", "mvn_test_output"],
+      "force_long_output": true,
+      "min_output_chars": 1800,
+      "compression_expected": true
+    },
+    {
+      "id": 10,
+      "title": "收尾验证与目标对照",
+      "user_prompt": "请重新阅读所有源文件与测试，跑一遍完整测试套件，并输出一份'本次改造总结 vs 最初目标'对照清单。最初目标是'把 NoteStore 改造为分层结构：ID 生成、时间戳、持久化接口三者独立；CommandHandler、Main 调用新接口'。每一条最初目标请标记状态：已完成 / 部分完成 / 未完成，并指出对应文件与行号。如有任何漂移（与最初目标无关的改动），请显式列出。",
+      "expected_outputs": ["final_mvn_test_output", "goal_checklist_with_status", "drift_report_if_any", "summary_text"],
+      "force_long_output": true,
+      "min_output_chars": 2000,
+      "compression_expected": "likely"
+    }
+  ],
+  "log_schema": {
+    "round_id": "int",
+    "mode": "A_on|B_off|C_truncate",
+    "user_prompt_chars": "int",
+    "model_output_chars": "int",
+    "tool_result_chars": "int",
+    "context_before_compress_chars": "int",
+    "context_after_compress_chars": "int|null",
+    "compression_ratio": "float|null",
+    "summary_covered": "string|null",
+    "summary_chars": "int|null",
+    "anchor_goal_in_summary": "bool|null",
+    "drift_signals": "string|null"
+  }
+}

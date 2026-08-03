@@ -1,0 +1,10 @@
+{"ts": "2026-08-02T14:55:24.478133+00:00", "mode": "A_on", "round_id": 1, "title": "项目全景勘察", "user_prompt_chars": 187, "model_output_chars": 9561, "exit_code": 0, "dynamic_budget": 115808, "dynamic_actual": 0}
+{"ts": "2026-08-02T14:55:27.974867+00:00", "mode": "A_on", "round_id": 2, "title": "跨文件依赖分析", "user_prompt_chars": 109, "model_output_chars": 9671, "exit_code": 0, "dynamic_budget": 115808, "dynamic_actual": 0}
+{"ts": "2026-08-02T14:55:30.320211+00:00", "mode": "A_on", "round_id": 3, "title": "第一次重大重构（核心目标）", "user_prompt_chars": 202, "model_output_chars": 9780, "exit_code": 0, "dynamic_budget": 115808, "dynamic_actual": 0}
+{"ts": "2026-08-02T14:55:32.739303+00:00", "mode": "A_on", "round_id": 4, "title": "补充单元测试", "user_prompt_chars": 109, "model_output_chars": 9671, "exit_code": 0, "dynamic_budget": 115808, "dynamic_actual": 0}
+{"ts": "2026-08-02T14:55:34.996343+00:00", "mode": "A_on", "round_id": 5, "title": "修复测试暴露的 Bug", "user_prompt_chars": 131, "model_output_chars": 9697, "exit_code": 0, "dynamic_budget": 115808, "dynamic_actual": 0}
+{"ts": "2026-08-02T14:55:37.234515+00:00", "mode": "A_on", "round_id": 6, "title": "新增子命令（search）", "user_prompt_chars": 165, "model_output_chars": 9741, "exit_code": 0, "dynamic_budget": 115808, "dynamic_actual": 0}
+{"ts": "2026-08-02T14:55:39.674480+00:00", "mode": "A_on", "round_id": 7, "title": "引入配置文件", "user_prompt_chars": 145, "model_output_chars": 9723, "exit_code": 0, "dynamic_budget": 115808, "dynamic_actual": 0}
+{"ts": "2026-08-02T14:55:41.997917+00:00", "mode": "A_on", "round_id": 8, "title": "错误处理强化", "user_prompt_chars": 103, "model_output_chars": 9665, "exit_code": 0, "dynamic_budget": 115808, "dynamic_actual": 0}
+{"ts": "2026-08-02T14:55:44.324439+00:00", "mode": "A_on", "round_id": 9, "title": "性能与代码风格整理", "user_prompt_chars": 100, "model_output_chars": 9662, "exit_code": 0, "dynamic_budget": 115808, "dynamic_actual": 0}
+{"ts": "2026-08-02T14:55:46.755878+00:00", "mode": "A_on", "round_id": 10, "title": "收尾验证与目标对照", "user_prompt_chars": 189, "model_output_chars": 9755, "exit_code": 0, "dynamic_budget": 115808, "dynamic_actual": 0}

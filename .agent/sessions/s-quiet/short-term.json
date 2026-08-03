@@ -1,0 +1,55 @@
+{
+  "schema" : "2",
+  "sessionId" : "s-quiet",
+  "createdAt" : "2026-08-02T14:03:54.090517700Z",
+  "updatedAt" : "2026-08-02T14:06:52.784323500Z",
+  "messages" : [ {
+    "role" : "user",
+    "content" : "short user msg",
+    "timestamp" : "2026-08-02T14:03:54.090517700Z"
+  }, {
+    "role" : "assistant",
+    "content" : "short assistant msg",
+    "timestamp" : "2026-08-02T14:03:54.168480500Z"
+  }, {
+    "role" : "user",
+    "content" : "short user msg",
+    "timestamp" : "2026-08-02T14:04:21.116220300Z"
+  }, {
+    "role" : "assistant",
+    "content" : "short assistant msg",
+    "timestamp" : "2026-08-02T14:04:21.171726Z"
+  }, {
+    "role" : "user",
+    "content" : "short user msg",
+    "timestamp" : "2026-08-02T14:04:45.792922100Z"
+  }, {
+    "role" : "assistant",
+    "content" : "short assistant msg",
+    "timestamp" : "2026-08-02T14:04:45.847939400Z"
+  }, {
+    "role" : "user",
+    "content" : "short user msg",
+    "timestamp" : "2026-08-02T14:05:48.462872300Z"
+  }, {
+    "role" : "assistant",
+    "content" : "short assistant msg",
+    "timestamp" : "2026-08-02T14:05:48.498033900Z"
+  }, {
+    "role" : "user",
+    "content" : "short user msg",
+    "timestamp" : "2026-08-02T14:06:13.588200200Z"
+  }, {
+    "role" : "assistant",
+    "content" : "short assistant msg",
+    "timestamp" : "2026-08-02T14:06:13.627967300Z"
+  }, {
+    "role" : "user",
+    "content" : "short user msg",
+    "timestamp" : "2026-08-02T14:06:52.734412300Z"
+  }, {
+    "role" : "assistant",
+    "content" : "short assistant msg",
+    "timestamp" : "2026-08-02T14:06:52.784323500Z"
+  } ]
+}

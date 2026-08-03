@@ -1,0 +1,17 @@
+{
+  "schema" : "2",
+  "sessionId" : "1718a651-2ed7-409f-bd7f-a00e3cb33df7",
+  "updatedAt" : "2026-08-02T10:38:24.422561700Z",
+  "summary" : "",
+  "topics" : [ ],
+  "keywords" : [ ],
+  "importance" : 3,
+  "crossSessionProgress" : {
+    "done" : [ ],
+    "inProgress" : [ ],
+    "blocked" : [ ]
+  },
+  "sessionSummary" : "会话开始，用户打招呼，助手回应。尚未进入具体任务讨论。",
+  "userFocus" : [ ],
+  "contextualRules" : [ ]
+}
