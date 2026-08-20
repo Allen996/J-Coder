@@ -4,6 +4,7 @@ import org.example.agent.core.handle.AgentHandle;
 import org.example.agent.core.observer.ReActLoopObserver;
 import org.example.agent.core.result.AgentExecutionResult;
 import org.example.agent.core.task.AgentTask;
+import org.example.agent.core.event.AgentEvent;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
@@ -25,7 +26,7 @@ public interface AgentRuntime {
     AgentExecutionResult execute(AgentTask task);
 
     /** 增量返回 AgentEvent 事件流，最后以 FINISH 或 ERROR 收尾。 */
-    Flux<org.example.agent.core.event.AgentEvent> stream(AgentTask task);
+    Flux<AgentEvent> stream(AgentTask task);
 
     /** 协作式取消，副作用是把同一个 executionId 的订阅链 complete。 */
     AgentHandle cancel(String executionId);

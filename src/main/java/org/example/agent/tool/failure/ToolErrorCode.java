@@ -24,6 +24,8 @@ public enum ToolErrorCode {
     COMMAND_NOT_FOUND,
     WRITE_FILE_CONFLICT,
     INVALID_ARGUMENT,
+    AUTHORIZATION_DENIED,
+    INTENT_GATE_BLOCKED,
 
     // ===== 瞬时类 =====
     TIMEOUT,
@@ -40,7 +42,8 @@ public enum ToolErrorCode {
         return switch (this) {
             case PATH_NOT_FOUND, PATH_OUTSIDE_SANDBOX, PATH_BLACKLISTED,
                  SHELL_DENIED, SHELL_ARG_INJECTION, COMMAND_NOT_FOUND,
-                 WRITE_FILE_CONFLICT, INVALID_ARGUMENT -> FailureKind.PARAM;
+                 WRITE_FILE_CONFLICT, INVALID_ARGUMENT,
+                 AUTHORIZATION_DENIED, INTENT_GATE_BLOCKED -> FailureKind.PARAM;
             case TIMEOUT, NETWORK_TRANSIENT, IO_TRANSIENT -> FailureKind.TRANSIENT;
             case SHELL_NONZERO_EXIT, GREP_ZERO_HITS,
                  GIT_COMMIT_NO_CHANGES, INTERNAL_ERROR -> FailureKind.LOGIC;

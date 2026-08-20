@@ -22,6 +22,8 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Component;
+import org.example.agent.core.task.context.TaskPlanContextAssembler;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Instant;
 import java.time.ZoneId;
@@ -54,9 +56,9 @@ public class ContextBuilder {
     private final LongTermStore longTermStore;
     private final MemoryIndex memoryIndex;
     private final MemoryRecallScorer recallScorer;
-    private final org.example.agent.core.task.context.TaskPlanContextAssembler taskPlanAssembler;
+    private final TaskPlanContextAssembler taskPlanAssembler;
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public ContextBuilder(ContextBudgetPolicy policy,
                           SessionMessageStore sessionStore,
                           ConversationCompressor compressor,
@@ -65,7 +67,7 @@ public class ContextBuilder {
                           MidTermStore midTermStore,
                           LongTermStore longTermStore,
                           MemoryIndex memoryIndex,
-                          org.example.agent.core.task.context.TaskPlanContextAssembler taskPlanAssembler) {
+                          TaskPlanContextAssembler taskPlanAssembler) {
         this(policy, sessionStore, compressor, staticLayer, dynamicLayer,
                 midTermStore, longTermStore, memoryIndex, null, taskPlanAssembler);
     }
@@ -79,7 +81,7 @@ public class ContextBuilder {
                           LongTermStore longTermStore,
                           MemoryIndex memoryIndex,
                           MemoryRecallScorer recallScorer,
-                          org.example.agent.core.task.context.TaskPlanContextAssembler taskPlanAssembler) {
+                          TaskPlanContextAssembler taskPlanAssembler) {
         this.policy = policy == null ? ContextBudgetPolicy.defaultPolicy() : policy;
         this.sessionStore = sessionStore;
         this.compressor = compressor == null ? new ConversationCompressor() : compressor;

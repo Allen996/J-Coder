@@ -8,6 +8,11 @@ import org.example.agent.core.observer.ReActLoopObserver;
 import org.example.agent.core.record.StepRecord;
 import org.example.agent.core.signal.ReActLoopSignal;
 import org.example.agent.core.task.AgentTask;
+import org.example.agent.intent.IntentContext;
+import org.example.agent.intent.IntentGate;
+import org.example.agent.intent.L2ToolGateResult;
+import org.example.agent.intent.LlmToolGate;
+import org.example.agent.intent.ToolGateDecision;
 import org.example.agent.tool.cache.ToolResultStore;
 import org.example.agent.tool.config.CliToolProperties;
 import org.example.agent.tool.gateway.ToolGateway;
@@ -88,6 +93,10 @@ public class ReActLoop {
     private final ToolDescriptorRegistry descriptorRegistry;
     private final ExecutorService toolExecutor;
     private final ToolResultStore resultStore;
+    private final IntentGate intentGate;
+    private final LlmToolGate toolGate;
+    /** L1 入口产出,loop 期间持续可读。null 表示已禁用。 */
+    private volatile IntentContext intentContext;
 
     /** 兼容入口:缺少新增强依赖(用于纯单元测试场景,不走 invoke 路径)。 */
     public ReActLoop(String executionId,
@@ -98,7 +107,7 @@ public class ReActLoop {
                      List<ToolCallback> toolCallbacks,
                      SideEffectTracker sideEffects) {
         this(executionId, chatModel, task, budget, toolGateway, toolCallbacks, sideEffects,
-                null, null, null, null, null);
+                null, null, null, null, null, null, null);
     }
 
     /** 兼容入口:带 ContextBuilder 但无增强依赖。 */
@@ -111,7 +120,7 @@ public class ReActLoop {
                      SideEffectTracker sideEffects,
                      ContextBuilder contextBuilder) {
         this(executionId, chatModel, task, budget, toolGateway, toolCallbacks, sideEffects,
-                contextBuilder, null, null, null, null);
+                contextBuilder, null, null, null, null, null, null);
     }
 
     /** 完整构造器。Spring 生产路径走这里。 */
@@ -127,6 +136,26 @@ public class ReActLoop {
                      ToolDescriptorRegistry descriptorRegistry,
                      ExecutorService toolExecutor,
                      ToolResultStore resultStore) {
+        this(executionId, chatModel, task, budget, toolGateway, toolCallbacks, sideEffects,
+                contextBuilder, properties, descriptorRegistry, toolExecutor, resultStore,
+                null, null);
+    }
+
+    /** 完整构造器(带意图层)。生产 + 意图启用时走这里。 */
+    public ReActLoop(String executionId,
+                     ChatModel chatModel,
+                     AgentTask task,
+                     AgentBudget budget,
+                     ToolGateway toolGateway,
+                     List<ToolCallback> toolCallbacks,
+                     SideEffectTracker sideEffects,
+                     ContextBuilder contextBuilder,
+                     CliToolProperties properties,
+                     ToolDescriptorRegistry descriptorRegistry,
+                     ExecutorService toolExecutor,
+                     ToolResultStore resultStore,
+                     IntentGate intentGate,
+                     LlmToolGate toolGate) {
         this.executionId = executionId;
         this.chatModel = chatModel;
         this.task = task;
@@ -140,6 +169,8 @@ public class ReActLoop {
         this.descriptorRegistry = descriptorRegistry;
         this.toolExecutor = toolExecutor;
         this.resultStore = resultStore;
+        this.intentGate = intentGate;
+        this.toolGate = toolGate;
         log.info("executionId={} ReActLoop initialized with {} tool callbacks: {}",
                 executionId,
                 this.toolCallbacks.size(),
@@ -152,17 +183,36 @@ public class ReActLoop {
     public String getAgentName() { return agentName; }
     public AgentBudget getBudget() { return budget; }
 
+    /** 设计稿 §2:挂在 ReActLoop 上的可读上下文。loop 完成后置 null 释放。 */
+    public IntentContext getIntentContext() { return intentContext; }
+
     public record SubscribeResult(List<StepRecord> records, String fullAnswer, List<Message> turnMessages) {
     }
 
     public SubscribeResult subscribe(String input,
-                                     Map<String, Object> toolArgsMap,
                                      List<ReActLoopObserver> observers,
                                      ReActLoopSignal signal) {
         AtomicInteger stepCounter = new AtomicInteger(0);
         AtomicLong lastStepStart = new AtomicLong(System.currentTimeMillis());
         List<StepRecord> records = Collections.synchronizedList(new ArrayList<>());
         StringBuilder fullAnswer = new StringBuilder();
+
+        // 设计稿 §2 + §3:L1 入口拦截 —— 在 buildInitialMessages 之前,一次性执行。
+        // 失败 → IntentGate 自己降级到 OFF_TOPIC,不影响后续 loop。
+        if (intentGate != null) {
+            try {
+                this.intentContext = intentGate.classify(executionId, input);
+                log.info("executionId={} L1 primary={} conf={} model={}",
+                        executionId,
+                        intentContext.primaryLabel(),
+                        intentContext.l1() == null ? 0.0 : intentContext.l1().confidence(),
+                        intentContext.resolvedModel());
+            } catch (RuntimeException ex) {
+                log.warn("executionId={} L1 classify threw, falling back: {}", executionId, ex.toString());
+                this.intentContext = null;
+            }
+        }
+
         List<Message> messages = new ArrayList<>(buildInitialMessages(input));
         List<Message> turnMessages = new ArrayList<>();
         if (input != null && !input.isEmpty()) {
@@ -287,6 +337,29 @@ public class ReActLoop {
             }
         }
 
+        // 设计稿 §4:L2 工具语义门控 —— 逐 ToolCall 判别。
+        // REWRITE → 把 ToolCall 改写成 suggestedAlternative;BLOCK → 写一条结构化 brief 当作 ToolResponse,不调用沙箱;
+        // WARN → 不改写,但标记 "authz-required",由 ToolGateway 现有 AuthorizationGate 处理。
+        List<AssistantMessage.ToolCall> writeCallsFinal = new ArrayList<>(writeCalls.size());
+        for (AssistantMessage.ToolCall tc : writeCalls) {
+            L2ToolGateResult g = evaluateGate(tc, step);
+            if (intentContext != null) intentContext.recordTool(new IntentContext.ToolHistoryEntry(tc.name(), g.decision().name(), g.confidence()));
+            if (g.decision() == ToolGateDecision.BLOCK) {
+                toolResponses.add(new ToolResponseMessage.ToolResponse(
+                        tc.id(), tc.name(), formatBlocked(tc, g)));
+                continue;
+            }
+            if (g.decision() == ToolGateDecision.REWRITE && g.suggestedAlternative() != null) {
+                AssistantMessage.ToolCall rewritten = new AssistantMessage.ToolCall(
+                        tc.id(), g.suggestedAlternative(), tc.arguments(), tc.type());
+                if (isReadonly(rewritten.name())) readonlyCalls.add(rewritten);
+                else writeCallsFinal.add(rewritten);
+                continue;
+            }
+            writeCallsFinal.add(tc);
+        }
+        writeCalls = writeCallsFinal;
+
         // 写工具一律串行(顺序语义)
         for (AssistantMessage.ToolCall tc : writeCalls) {
             if (signal.isTerminateRequested()) break;
@@ -296,6 +369,26 @@ public class ReActLoop {
         }
 
         // 只读工具:开关关 / <2 个 / toolExecutor 缺失 → 串行
+        List<AssistantMessage.ToolCall> readonlyCallsFinal = new ArrayList<>(readonlyCalls.size());
+        for (AssistantMessage.ToolCall tc : readonlyCalls) {
+            L2ToolGateResult g = evaluateGate(tc, step);
+            if (intentContext != null) intentContext.recordTool(new IntentContext.ToolHistoryEntry(tc.name(), g.decision().name(), g.confidence()));
+            if (g.decision() == ToolGateDecision.BLOCK) {
+                toolResponses.add(new ToolResponseMessage.ToolResponse(
+                        tc.id(), tc.name(), formatBlocked(tc, g)));
+                continue;
+            }
+            if (g.decision() == ToolGateDecision.REWRITE && g.suggestedAlternative() != null) {
+                AssistantMessage.ToolCall rewritten = new AssistantMessage.ToolCall(
+                        tc.id(), g.suggestedAlternative(), tc.arguments(), tc.type());
+                if (isReadonly(rewritten.name())) readonlyCallsFinal.add(rewritten);
+                else writeCallsFinal.add(rewritten);
+                continue;
+            }
+            readonlyCallsFinal.add(tc);
+        }
+        readonlyCalls = readonlyCallsFinal;
+
         boolean parallel = properties != null && properties.parallel()
                 && toolExecutor != null
                 && readonlyCalls.size() > 1;
@@ -342,6 +435,26 @@ public class ReActLoop {
         return descriptorRegistry.get(toolName)
                 .map(ToolDescriptor::readonly)
                 .orElse(false);
+    }
+
+    /**
+     * 设计稿 §4:L2 单 ToolCall 判别。失败 / 关闭 → 默认 ALLOW。
+     */
+    private L2ToolGateResult evaluateGate(AssistantMessage.ToolCall tc, int step) {
+        if (toolGate == null || intentContext == null) return L2ToolGateResult.allow(1.0, "gate disabled");
+        try {
+            return toolGate.evaluate(intentContext, tc.name(), tc.arguments(), step);
+        } catch (RuntimeException ex) {
+            log.warn("executionId={} L2 evaluate threw for {}: {}", executionId, tc.name(), ex.toString());
+            return toolGate.evaluateDegraded();
+        }
+    }
+
+    /** 把 BLOCK 结果写成结构化 brief 塞回 ToolResponse(让 LLM 看到为什么被拦)。 */
+    private String formatBlocked(AssistantMessage.ToolCall tc, L2ToolGateResult g) {
+        return "[error: INTENT_GATE_BLOCKED] " + (g.reason() == null ? "" : g.reason())
+                + "\nsuggestion: 选择与当前意图匹配的工具,或重述需求"
+                + "\nargs: " + (tc.arguments() == null ? "{}" : tc.arguments());
     }
 
     /**
@@ -437,12 +550,16 @@ public class ReActLoop {
     }
 
     private Prompt buildPrompt(List<Message> messages) {
-        DashScopeChatOptions options = DashScopeChatOptions.builder()
+        DashScopeChatOptions.DashScopeChatOptionsBuilder builder = DashScopeChatOptions.builder()
                 .toolCallbacks(toolCallbacks)
                 .internalToolExecutionEnabled(false)
-                .withMultiModel(true)
-                .build();
-        return new Prompt(messages, options);
+                .withMultiModel(true);
+        // 设计稿 §6:第一层分类后,意图路由模型。
+        // 只发生在 L1 入口,loop 内部不切换,避免重建上下文。
+        if (intentContext != null && intentContext.resolvedModel() != null) {
+            builder.withModel(intentContext.resolvedModel());
+        }
+        return new Prompt(messages, builder.build());
     }
 
     private ThoughtEvent buildThoughtEvent(Instant at, int step, String text,

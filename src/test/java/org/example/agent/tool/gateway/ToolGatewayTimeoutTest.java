@@ -105,7 +105,8 @@ class ToolGatewayTimeoutTest {
                 noopTracker,
                 new CliToolProperties(),
                 noopStore,
-                pool);
+                pool,
+                ToolGateway.AllowAllAuthorizationGate.INSTANCE);
     }
 
     static class SlowCallback implements ToolCallback {

@@ -4,7 +4,7 @@ spring:
     banner-mode: off
   ai:
     dashscope:
-      api-key: ${DASHSCOPE_API_KEY:}
+      api-key: ${DASHSCOPE_API_KEY:sk-ea7271e381764060a834b759291252a4}
       chat:
         options:
           model: ${DASHSCOPE_MODEL:qwen3.7-plus-2026-05-26}
@@ -25,7 +25,7 @@ agent:
       # 业务总时长封顶（Future.get），须 >= read-timeout-ms × (1 + retry) 才能让 socket 超时先生效
       call-timeout-ms: 600000
   memory:
-    api-key: ${AGENT_MEMORY_API_KEY:${DASHSCOPE_API_KEY:}}
+    api-key: ${AGENT_MEMORY_API_KEY:${DASHSCOPE_API_KEY:sk-ea7271e381764060a834b759291252a4}}
     model: ${AGENT_MEMORY_MODEL:qwen3.7-flash}
     http:
       connect-timeout-ms: 10000
@@ -45,3 +45,29 @@ cli:
       max-total-bytes: 524288000
       ttl: PT168H
       auto-inline-byte-budget: 16384
+  # 设计稿:意图识别模块(两级门控)
+  intent:
+    enabled: true
+    l1:
+      enabled: true
+      timeout-ms: 3000
+      thresholds:
+        direct: 0.85
+        offer: 0.60
+        rewrite-cap: 0.15
+      allow-labels: []
+    l2:
+      enabled: true
+      timeout-ms: 2000
+      thresholds:
+        allow: 0.80
+        warn: 0.55
+        block-conflict-gap: 0.15
+        block-floor: 0.55
+    model-routing:
+      light: qwen3.7-flash
+      code: qwen3.7-plus
+      general: qwen3.7-plus
+    fallback:
+      enabled: true
+      default-label: OFF_TOPIC

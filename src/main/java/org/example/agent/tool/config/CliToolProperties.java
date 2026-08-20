@@ -3,6 +3,7 @@ package org.example.agent.tool.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
+import java.util.List;
 
 /**
  * 工具系统的可调参数。集中在 application.yml 的 {@code cli.tool} 节点下。
@@ -16,7 +17,8 @@ public record CliToolProperties(
         long defaultTimeoutMs,
         int toolExecutorCore,
         int toolExecutorMax,
-        ResultCache resultCache
+        ResultCache resultCache,
+        Authorization authorization
 ) {
 
     public CliToolProperties {
@@ -26,10 +28,13 @@ public record CliToolProperties(
         if (resultCache == null) {
             resultCache = new ResultCache(true, 524_288_000L, Duration.ofDays(7), 16_384);
         }
+        if (authorization == null) {
+            authorization = new Authorization(Authorization.Mode.PROMPT, List.of());
+        }
     }
 
     public CliToolProperties() {
-        this(true, 60_000L, 0, 8, null);
+        this(true, 60_000L, 0, 8, null, null);
     }
 
     /**
@@ -51,6 +56,34 @@ public record CliToolProperties(
             if (maxTotalBytes <= 0) maxTotalBytes = 524_288_000L;
             if (ttl == null) ttl = Duration.ofDays(7);
             if (autoInlineByteBudget <= 0) autoInlineByteBudget = 16_384;
+        }
+    }
+
+    /**
+     * 中高风险工具授权策略。
+     *
+     * <ul>
+     *   <li>{@code PROMPT} —— 每一次都问用户（默认）</li>
+     *   <li>{@code AUTO_APPROVE} —— 全自动放行（开发模式；同 SessionState.autoApprove=true）</li>
+     *   <li>{@code AUTO_DENY} —— 全自动拒绝（paranoid 模式）</li>
+     * </ul>
+     *
+     * <p>另可通过 {@code alwaysAllow} 预先放行指定工具（不区分 risk 等级），
+     * 等价于会话级 "always"。
+     */
+    public record Authorization(
+            Mode mode,
+            List<String> alwaysAllow
+    ) {
+        public enum Mode { PROMPT, AUTO_APPROVE, AUTO_DENY }
+
+        public Authorization {
+            if (mode == null) mode = Mode.PROMPT;
+            if (alwaysAllow == null) alwaysAllow = List.of();
+        }
+
+        public Authorization() {
+            this(Mode.PROMPT, List.of());
         }
     }
 }

@@ -126,7 +126,7 @@ public class ReplLoop {
     }
 
     public void run() {
-        printBanner();
+        printBanner(); //标题打印
         boolean running = true;
         while (running) {
             String line;
@@ -148,8 +148,9 @@ public class ReplLoop {
             if (trimmed.isEmpty()) continue;
 
             // Drain any leftover renderer output before processing next input
-            renderer.drainTo(out, 0);
-
+            renderer.drainTo(out, 0); //处理新输入前清空所有待输出的内容
+            
+            // 路由，判断输入类型
             try {
                 InputRouter.Route route = inputRouter.route(trimmed);
                 switch (route) {
@@ -245,7 +246,7 @@ public class ReplLoop {
                 }
             }
         }
-
+        //解析带有@的文件，通过resolver进行解析，并报告加载了多少文件，有多少文件没有找到
         AtFileResolver.Resolved resolved = atFileResolver.resolve(raw, projectRoot);
         String finalInput = atFileResolver.buildPrompt(resolved, projectRoot);
         if (finalInput.isBlank()) {
@@ -262,13 +263,15 @@ public class ReplLoop {
             out.flush();
         }
 
+        // 创建会话ID、处理过的用户输入、用户角色、promptId
         AgentTask task = AgentTask.builder()
                 .sessionId(session.getSessionId())
                 .input(finalInput)
                 .role("chat")
                 .promptId("chat.react-assistant")
                 .build();
-
+        
+        // 计时锁，等待agent完成
         CountDownLatch done = new CountDownLatch(1);
         runtime.stream(task)
                 .subscribeOn(Schedulers.boundedElastic())

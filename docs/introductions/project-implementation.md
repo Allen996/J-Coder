@@ -271,3 +271,194 @@ Slash 命令或 `TaskPlanTools` 创建 `TaskPlan` → `TaskScheduler` 校验 DAG
 5. 看 `ToolGateway.java`、`ToolConfig.java`、各工具类及 sandbox 包，理解工具调用安全边界。
 6. 看 `TaskOrchestrator.java`、`TaskScheduler.java`、`TaskPlanRepository.java`、`VerifyRunner.java`，理解计划、DAG、持久化和验证闭环。
 7. 最后看 memory 包和 `src/main/resources/prompts/memory/`，理解记忆模型的输入输出与文件同步。
+
+## 13. 端到端联动案例
+
+为帮助读者把前述章节的模块关系落到一次真实交互上，本节跟踪一条贯穿 CLI、Agent、Context、Memory、Tool、Task 全链路的请求：用户在项目根目录中向 REPL 输入一段话，希望助手把 `src/main/java/org/example/agent/tool/gateway/ToolGateway.java` 里的默认工具超时调整为 30 秒，并在改完之后自动跑一次构建确认没有问题。
+
+> 我在 src/main/java/org/example/agent/tool/gateway/ToolGateway.java 看到默认超时有点短，能不能改成 30 秒？改完帮我跑一下编译，确保没问题。
+
+下面按时间顺序拆解这条请求在系统内部的流转，把前面章节出现过的模块一次性串起来。
+
+### 13.1 CLI 入口与输入分流
+
+`Main` 启动 Spring 容器后取出 `ReplLoop`。`ReplLoop` 调起 JLine 的 `LineReader` 读取一行，`MultiLineReader` 先判断括号、代码块等场景是否需要继续读行；确认是单行输入后交给 `InputRouter`。
+
+`InputRouter` 看到输入既不是 `/` 前缀的 Slash 命令，也不是 `!` 前缀的 Shell 透传，因此按普通 Agent 请求处理。`AtFileResolver` 扫描文本，没有匹配到 `@` 形式的本地文件引用，于是把原始字符串、当前 `SessionState` 中的 `sessionId`、角色和 promptId 一起打包成 `AgentTask`，提交给 `AgentRuntimeImpl.stream`。
+
+### 13.2 运行时初始化与上下文构建
+
+`AgentRuntimeImpl` 为本次请求生成 executionId，按 `agent.context.*` 配置创建一份独立的 `ContextBudgetPolicy`，并按预算策略绑定 Token 预算、步数和超时三个观察者。同时 `MemoryTurnHook` 的会话钩子被通知进入新回合。
+
+随后 `ContextBuilder` 装配模型输入：
+
+1. `StaticLayer` 写入角色定义、可用工具清单（含 `FileTools`、`GrepTools`、`ShellTools`、`TaskPlanTools`）、修改代码时的推理约束和运行时元信息。
+2. `DynamicLayer` 写入本 session 的 `SessionMessageStore` 历史、`MidTermStore` 当前会话状态、`MemoryIndex` 暴露的可召回主题，以及当前活跃 `TaskPlan` 的占位（此刻还没有活动计划）。
+3. `ProjectScanner` 联合 `GitignoreMatcher` 扫描项目目录，结构化结果由 `ProjectContextCache` 提供给动态层，因此模型能看到当前路径与目标文件所在包结构，而无需每轮重复完整扫描。
+
+当静态、动态两层加上当前请求的估算 token 接近 `ContextBudgetPolicy` 阈值时，`ConversationCompressor` 会先尝试压缩 session 历史；本案例历史很短，不会触发压缩。
+
+### 13.3 模型规划与任务创建
+
+模型在第一轮思考中判断这次请求包含两个独立目标（修改源码、跑编译验证），并且中途可能出现构建失败需要回头改，于是调用 `TaskPlanTools` 的 create_plan 工具。`ToolGateway` 接收调用后查 `ToolDescriptorRegistry` 找到对应回调和 descriptor，按工具名把控制权交给任务系统。
+
+`TaskScheduler` 校验子任务依赖 DAG，确认「读取并修改文件 → 运行构建验证」是合理顺序，`TaskPlanRepository` 把计划、子任务和初始 checkpoint 写入本地文件。`TaskPlanContextAssembler` 同步把活动计划和当前子任务注入 Dynamic Layer，使后续轮次模型都能看到目标、依赖与进度。
+
+### 13.4 读取并修改源文件
+
+进入第一个子任务。`AgentRuntimeSubTaskExecutor` 把子任务包装为新的 `AgentTask`，调用 `AgentRuntimeImpl.stream` 启动一次嵌套的 ReAct 流程。模型先后调用：
+
+- `GrepTools.search_content`：在 `src/main/java/org/example/agent/tool/gateway/` 范围内搜索超时字段，确认默认值的精确位置。
+- `FileTools.read_file`：读取目标片段，判断相邻上下文。
+- `FileTools.edit_file`：把默认超时改为 30 秒。
+
+每次工具调用都走 `ToolGateway`：
+
+1. 解析参数，发送 pre-check 事件。
+2. `ToolDescriptorRegistry` 给出 risk、可逆性、超时与缓存策略。
+3. 文件类工具内部经过 `PathGate` 校验路径落在 `TrustedPaths` 中。
+4. `toolExecutor` 施加超时执行；写操作同时被 `InMemorySideEffectTracker` 记录原内容。
+5. 成功后写入 `ToolResultStore`（只对可缓存工具生效），并发出 observation 事件。
+
+模型收到修改结果后产出子任务 1 的总结，`TaskOrchestrator` 持久化 checkpoint 并把子任务标记为 COMPLETED。
+
+### 13.5 真实构建与 VERIFY 闭环
+
+第二个子任务被标记为 VERIFY 类型。`VerifyRunner` 解析 `SubTaskSpec` 中的命令（Maven 编译），调用 `ShellTools.execute_command` 真实执行 `mvn -q -DskipTests compile`。`CommandGate` 先做静态风险过滤，`ExecutionGate` 决定是否需要用户授权；普通构建命令继续放行。
+
+如果构建成功：
+
+1. `VerifyRunner` 发布 `VerifyPassedEvent`。
+2. `TaskOrchestrator` 将子任务置为 VERIFIED，关闭计划，并向 `MemoryTurnHook` 发出计划完成信号。
+
+如果构建失败：
+
+1. `VerifyRunner` 发布 `VerifyFailedEvent` 并附带失败日志摘要。
+2. `TaskOrchestrator` 在失败节点之后局部插入一个 FIX 子任务，重新跑一次 AgentRuntime，由模型根据错误日志调整修改，再次进入 VERIFY。
+3. FIX 循环的次数受 `cli.project-root` 推导出的 `verifyFailureLimit` 控制；超出后整条计划置为 FAILED，等待用户通过 `/plan` 或 `/tasks` 介入。
+
+### 13.6 记忆、事件与渲染
+
+主回答路径与上述验证流程并行推进。每次 `AgentRuntimeImpl` 完成一个 turn：
+
+- 原始消息被 `SessionMessageStore` 保存为短期记忆候选。
+- `MemoryTurnHook` 在回合结束时调用 `MidTermStore` 写入本轮要点，并把 sessionId 通知给 `LongTermMaintainer`。
+- `LongTermMaintainer` 异步提取候选，写入项目记忆目录；`MemoryIndexSynchronizer` 同步更新 `MEMORY.md`。这些维护动作不会阻塞本轮主回答，即使失败也不影响最终回复。
+
+事件层面，`SinkEmittingObserver` 把工具动作、子任务进度、验证结果和模型最终回答推到 Reactor Flux。`CliRenderer` 注册为运行时观察者，把流式回答、`StatusLine` 当前阶段、`TaskProgressRenderer` 的计划进度排入渲染队列，由 `ReplLoop` 主线程统一 drain 到终端，因此 ReAct 回调、工具线程与终端写线程互不竞争。
+
+### 13.7 闭环与下一轮复用
+
+整条链路结束后，`TaskPlanRepository` 写入最终 checkpoint，`MemoryTurnHook` 完成增量更新，`ExecutionRegistry` 释放本次 executionId。用户下一次提问时，`ContextBuilder` 装配 Dynamic Layer 时会：
+
+- 从 `SessionMessageStore` 拿到原始消息。
+- 从 `MidTermStore` 拿到本会话压缩摘要。
+- 从 `MemoryIndex` 拿到刚刚被长期化的"修改 ToolGateway 默认超时"条目。
+- 从 `TaskPlanContextAssembler` 拿到已完成计划作为历史参考。
+
+`MemoryRecallScorer` 会按相关性决定哪些记忆值得召回到本轮提示，保证后续提问无需重述背景。由于 CLI 输入分流、上下文预算、记忆异步维护、工具安全闸门、任务验证闭环和渲染解耦都已经按角色解耦，即便换成更复杂的多步骤需求，也能复用同一套协调路径，而无需重新设计模块边界。
+
+## 14. 意图识别（两层门控 + 模型路由）
+
+`design/intent.md` 提出的两阶段意图识别已落地在 `org.example.agent.intent` 包。
+
+### 14.1 触发位置
+
+- L1（粗分类）发生在 `ReActLoop.subscribe()` 入口、`buildInitialMessages()` 之前；每个 ReActLoop 实例只在首轮触发一次（`IntentContext.sticky` 标志），后续步骤不会重复分类。设计稿 §9 的"第 N 轮再跑 L1"留作后续扩展。
+- L2（工具语义门控）发生在 `ReActLoop.dispatchToolCalls()` 拿到模型产出的 `assistant.getToolCalls()` 后、`toolGateway.invoke()` 之前，对**每个 ToolCall** 单独判别。
+
+`AgentRuntimeImpl.prepare(task)` 在构造 `ReActLoop` 时把 `IntentGate` 与 `LlmToolGate` 一并注入；旧的 13 参构造器通过新增 16 参重载保持兼容，旧路径与旧测试不受影响。
+
+### 14.2 数据契约
+
+| 类型 | 角色 |
+| --- | --- |
+| `IntentLabel` | 6 个枚举：READ_CODE / WRITE_PROJECT / RUN_COMMAND / CHAT_QA / PLANNING / OFF_TOPIC |
+| `L1IntentResult` | L1 完整输出（primary / confidence / candidates / slots / negativeSignals / modelRouteHint / fallback） |
+| `IntentContext` | 挂在 ReActLoop 上的可读上下文，提供 `primaryLabel()`、`resolvedModel()`、`recordTool()` 给 L2 / 路由 / 日志观测者 |
+| `L2ToolGateResult` | L2 输出（decision / confidence / reason / suggestedAlternative） |
+| `ToolGateDecision` | ALLOW / WARN / BLOCK / REWRITE |
+| `ModelRouteHint` | LIGHT / CODE / GENERAL |
+| `IntentAwareToolSet` | 标签 → 推荐工具集合的硬编码映射（设计稿 §6），同时给 L2 判断"工具是否在推荐集合内" |
+
+### 14.3 L1 流水线
+
+`IntentGate.classify()` 把 4 个组件串成一条流水线：
+
+1. `ChatModelLlmIntentClassifier` 调一次廉价的 LLM（默认 `qwen3.7-flash`，通过 `DashScopeChatOptions.withModel` 切换），prompt 控制在 500 token 以内，强制 JSON 返回；解析失败 / 超时统一翻译成 `Outcome.fallback(reason)`。
+2. `KeywordSignalExtractor` 扫中文关键词（看 / 解释 / 改 / 新增 / 跑 / 提交 / 什么是 …），同时识别反向前缀（别 / 不要 / 先别）；英文只覆盖部分关键词，留空余由 LLM 自评覆盖。
+3. `SlotCompletenessChecker` 按类别必填槽位（WRITE_PROJECT 需 target_file + change_type 等）评估完整度，并对原始输入做文件名启发式补足。
+4. `LocalIntentScorer` 用设计稿 §5.3 的公式融合三类信号：
+
+   ```
+   final_conf = 0.6 * llm_conf
+              + 0.2 * keyword_match_score
+              + 0.2 * slot_completeness_score
+              - 0.15 if (rule_signal 强冲突 LLM 选择) else 0
+              - 0.10 if negative_signals 非空 else 0
+   ```
+
+5. `IntentPrompter` 根据最终置信度分三档：
+   - `DIRECT`（≥ 0.85）→ 不打扰用户
+   - `OFFER`（0.60..0.85）→ 打印 1..N 候选 + 0 跳过，让用户选
+   - `CLARIFY`（< 0.60）→ 一句话反问，回应后复用同一 LLM 上下文再跑一轮 L1
+
+`IntentFallbackPolicy` 在以下场景兜底：L1 JSON 解析失败、L1 超时、配置开关关闭、空输入；统一产出 `OFF_TOPIC / conf=0.5 / fallback=true` 的 `L1IntentResult`，确保 loop 不会卡住。
+
+### 14.4 L2 工具门控
+
+`LlmToolGate.evaluate(intentContext, toolName, argsJson, step)` 在 5 条规则下做决策：
+
+| 情形 | 决策 |
+| --- | --- |
+| 工具不在 `ToolDescriptorRegistry` | BLOCK |
+| 工具属于 L1 推荐集合 | ALLOW |
+| READ_CODE 下用写工具 | REWRITE → 按优先级替换为 read_file / grep / list_dir / glob_files |
+| WRITE_PROJECT 早期 step + 读工具 | ALLOW（先读再写是合理路径） |
+| WRITE_PROJECT 后期 step + 纯读（非推荐） | WARN（疑似漂移） |
+| OFF_TOPIC / CHAT_QA 下任何工具 | BLOCK |
+| 非推荐集合但非强冲突 | WARN |
+
+BLOCK 不下发工具，而是以 `ToolResponseMessage.ToolResponse` 的形式把 `[error: INTENT_GATE_BLOCKED]` 摘要塞回 messages；REWRITE 则在 ReActLoop 入口把 ToolCall 改写成 `suggestedAlternative`，再走 ALLOW 路径；WARN 不改写但记录历史。失败 / 关闭 → 默认 ALLOW（设计稿 §4.1："宁可漏判不要误拦"）。
+
+L2 的 `INTENT_GATE_BLOCKED` 错误码已加入 `ToolErrorCode`，归类为 PARAM（沿用现有沙箱层语义）。
+
+### 14.5 模型路由
+
+L1 跑完后，`IntentGate` 把 `modelRouteHint` 映射到 `application.yml` 中的实际模型名（默认 `qwen3.7-flash` / `qwen3.7-plus`），结果放在 `IntentContext.resolvedModel()`。`ReActLoop.buildPrompt()` 在每次构造 `DashScopeChatOptions` 时调用 `withModel(intentContext.resolvedModel())`，同一 ChatModel bean 不需要换实例。
+
+路由结果**只在 L1 入口写入一次**，loop 内部不切换，避免每轮重建上下文。`SpringAiReactAgentProvider` 是 SPI 旁路（当前生产路径不经过它），未来若启用可按相同方式读取 `IntentContext.resolvedModel()`。
+
+### 14.6 可观测与配置
+
+- 每次 L1 / L2 调用写入 `Sl4jIntentLogSink`（Logger 名 `intent`），字段含 executionId / timestamp / 原始输入 / LLM 自评 / 规则建议 / 最终决策 / 降级原因。`IntentGate` 内置 64 条环形缓冲供 `/intent-stats` 直接消费。
+- 配置集中在 `application.yml` 的 `cli.intent` 节点下：
+  ```yaml
+  cli:
+    intent:
+      enabled: true
+      l1: { enabled: true, timeout-ms: 3000, thresholds: { direct: 0.85, offer: 0.60 } }
+      l2: { enabled: true, timeout-ms: 2000, thresholds: { allow: 0.80, warn: 0.55 } }
+      model-routing: { light: qwen3.7-flash, code: qwen3.7-plus, general: qwen3.7-plus }
+      fallback:     { enabled: true, default-label: OFF_TOPIC }
+  ```
+- 全局开关 `cli.intent.enabled=false` → 整套跳过，便于回归对比与 power user。
+
+### 14.7 Slash 命令
+
+`IntentStatsCommand`（`/intent-stats`）展示最近 64 条 L1 的标签分布、tier 分布、平均置信度、降级次数和最近 5 条明细。它和现有 23 个 slash 命令一样由 `SlashCommandRegistry` 自动发现，无需额外配置。
+
+### 14.8 测试
+
+`src/test/java/org/example/agent/intent/` 覆盖：
+- 关键词提取 8 例（含英文 fallback）
+- 槽位完整度 6 例（含文件名启发式）
+- 本地打分器 5 例（高置信、规则冲突、负向信号、降级、候选合并）
+- 降级策略 5 例（默认 / 全关 / L1 关 / 自定义兜底标签）
+- 配置类 4 例（默认值、阈值夹紧、fallback 标签默认）
+- 意图编排 5 例（direct / light / fallback / 空输入 / 结果缓存）
+- 工具门控 9 例（ALLOW / REWRITE / BLOCK / 未知 / 早期读 / 后期读 / null 上下文 / 降级 / 非推荐集合 WARN）
+- 提示器 6 例（suppress / 选号 / 选 0 / 空回车 / 澄清文本 / 空澄清）
+- 工具集 3 例（read 推荐 / write 推荐 / chat/off 空集合）
+
+整套 190 个测试（含原有 16 个）全部通过。

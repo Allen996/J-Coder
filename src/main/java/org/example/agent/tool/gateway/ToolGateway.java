@@ -6,6 +6,7 @@ import org.example.agent.core.event.ObservationEvent;
 import org.example.agent.core.event.RollbackEvent;
 import org.example.agent.core.observer.ReActLoopObserver;
 import org.example.agent.core.signal.ReActLoopSignal;
+import org.example.agent.tool.ToolDeniedException;
 import org.example.agent.tool.ToolExecutionException;
 import org.example.agent.tool.cache.ToolResultStore;
 import org.example.agent.tool.config.CliToolProperties;
@@ -17,8 +18,10 @@ import org.example.agent.tool.result.ToolError;
 import org.example.agent.tool.result.ToolResult;
 import org.example.agent.tool.rollback.RollbackSummary;
 import org.example.agent.tool.rollback.SideEffectTracker;
+import org.example.agent.tool.sandbox.AuthorizationGate;
 import org.example.agent.tool.spi.ToolDescriptor;
 import org.example.agent.tool.spi.ToolDescriptorRegistry;
+import org.example.agent.tool.spi.ToolRisk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.ToolCallback;
@@ -32,11 +35,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
@@ -70,6 +75,7 @@ public class ToolGateway {
     private final CliToolProperties properties;
     private final ToolResultStore resultStore;
     private final ExecutorService toolExecutor;
+    private final AuthorizationGate authGate;
 
     @Autowired
     public ToolGateway(ToolCallbackProvider toolCallbackProvider,
@@ -79,7 +85,8 @@ public class ToolGateway {
                        SideEffectTracker sideEffects,
                        CliToolProperties properties,
                        ToolResultStore resultStore,
-                       @Qualifier("toolExecutor") ExecutorService toolExecutor) {
+                       @Qualifier("toolExecutor") ExecutorService toolExecutor,
+                       AuthorizationGate authGate) {
         this.callbacks = java.util.Arrays.stream(toolCallbackProvider.getToolCallbacks())
                 .collect(Collectors.toMap(
                         cb -> cb.getToolDefinition().name(),
@@ -95,11 +102,12 @@ public class ToolGateway {
         this.properties = properties;
         this.resultStore = resultStore;
         this.toolExecutor = toolExecutor;
+        this.authGate = authGate;
     }
 
     /**
-     * 向后兼容的测试用 5 参构造器。生产路径不会走到 —— Spring 注入 8 参版。
-     * 调用 invoke() 时 resultStore/toolExecutor 为 null 会 NPE,这是预期(测试不应走 invoke)。
+     * 向后兼容的测试用 5 参构造器。生产路径不会走到 —— Spring 注入 9 参版。
+     * 旧测试默认走"全放行"授权闸，保证 MEDIUM 工具不被新闸误拦。
      */
     public ToolGateway(ToolCallbackProvider toolCallbackProvider,
                        ToolDescriptorRegistry descriptorRegistry,
@@ -107,7 +115,7 @@ public class ToolGateway {
                        RetryPolicy retryPolicy,
                        SideEffectTracker sideEffects) {
         this(toolCallbackProvider, descriptorRegistry, classifier, retryPolicy, sideEffects,
-                new CliToolProperties(), null, null);
+                new CliToolProperties(), null, null, AllowAllAuthorizationGate.INSTANCE);
     }
 
     public Optional<ToolCallback> lookup(String name) {
@@ -142,10 +150,33 @@ public class ToolGateway {
 
         ToolDescriptor descriptor = descriptorRegistry.get(toolName).orElse(null);
         long timeoutMs = resolveTimeoutMs(descriptor);
+        long start = System.currentTimeMillis();
+
+        // ===== Authorization gate (MEDIUM / HIGH) =====
+        // 在沙箱闸（CommandGate / PathGate，工具自身调用）之后再次校验：命令闸已拦过
+        // 黑名单模式，本闸只对未被工具层拒绝的中高风险调用起作用。
+        // 拒绝时抛 ToolDeniedException，由下方统一进 handleFailure 输出结构化 brief。
+        try {
+            if (descriptor != null && descriptor.risk() != ToolRisk.LOW
+                    && !authGate.isSessionAllowed(toolName)) {
+                AuthorizationGate.Decision decision = authGate.authorize(descriptor, toolName, argsMap);
+                if (!decision.approved()) {
+                    throw new ToolDeniedException(
+                            ToolErrorCode.AUTHORIZATION_DENIED,
+                            "user denied " + toolName + (decision.reason() == null ? "" : ": " + decision.reason()),
+                            "调整计划或换工具");
+                }
+                if (decision.sessionWide()) {
+                    authGate.rememberSessionAllow(toolName);
+                }
+            }
+        } catch (ToolDeniedException denied) {
+            long gateMs = System.currentTimeMillis() - start;
+            return handleFailure(executionId, denied, toolName, stepIndex, gateMs, argsMap, signal, observers);
+        }
 
         Instant invokedAt = Instant.now();
         emitActionInvoked(executionId, invokedAt, stepIndex, toolName, signal, observers);
-        long start = System.currentTimeMillis();
 
         try {
             String result = retryPolicy.execute(
@@ -268,6 +299,14 @@ public class ToolGateway {
                     tee.getErrorCode(),
                     tee.getMessage(),
                     tee.getSuggestion()));
+        }
+        if (t instanceof ToolDeniedException denied) {
+            // 沙箱拒绝 / 用户授权拒绝 —— DENIED 状态(不是 ERROR),briefForLlm 由 handleFailure 渲染
+            return ToolResult.denied(ToolError.of(
+                    kind,
+                    denied.getErrorCode(),
+                    denied.getMessage(),
+                    denied.getSuggestion()));
         }
         ToolErrorCode code = kind == FailureKind.TRANSIENT
                 ? ToolErrorCode.IO_TRANSIENT
@@ -435,5 +474,17 @@ public class ToolGateway {
             fallback.put("_raw", json);
             return fallback;
         }
+    }
+
+    /**
+     * 全放行授权闸。仅用于旧测试兼容 —— {@link #ToolGateway(ToolCallbackProvider, ToolDescriptorRegistry, FailureClassifier, RetryPolicy, SideEffectTracker)}
+     * 五参构造器默认注入本闸，避免新逻辑拦截历史用例。
+     */
+    public static final class AllowAllAuthorizationGate implements AuthorizationGate {
+        public static final AllowAllAuthorizationGate INSTANCE = new AllowAllAuthorizationGate();
+        private final Set<String> allowed = ConcurrentHashMap.newKeySet();
+        @Override public Decision authorize(ToolDescriptor descriptor, String toolName, Map<String, Object> args) { return Decision.allowOnce(); }
+        @Override public boolean isSessionAllowed(String toolName) { return allowed.contains(toolName); }
+        @Override public void rememberSessionAllow(String toolName) { if (toolName != null) allowed.add(toolName); }
     }
 }

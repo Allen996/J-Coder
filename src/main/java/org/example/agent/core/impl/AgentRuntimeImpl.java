@@ -28,6 +28,8 @@ import org.example.agent.core.result.AgentExecutionResult;
 import org.example.agent.core.runtime.AgentRuntime;
 import org.example.agent.core.signal.DefaultReActLoopSignal;
 import org.example.agent.core.task.AgentTask;
+import org.example.agent.intent.IntentGate;
+import org.example.agent.intent.LlmToolGate;
 import org.example.agent.tool.gateway.ToolGateway;
 import org.example.agent.tool.rollback.SideEffectTracker;
 import org.springframework.ai.chat.messages.Message;
@@ -84,6 +86,8 @@ public class AgentRuntimeImpl implements AgentRuntime {
     private final org.example.agent.tool.config.CliToolProperties cliToolProperties;
     private final org.example.agent.tool.spi.ToolDescriptorRegistry toolDescriptorRegistry;
     private final ExecutorService toolExecutor;
+    private final IntentGate intentGate;
+    private final LlmToolGate toolGate;
 
     @Autowired
     public AgentRuntimeImpl(ChatModel chatModel,
@@ -100,12 +104,14 @@ public class AgentRuntimeImpl implements AgentRuntime {
                             org.example.agent.tool.config.CliToolProperties cliToolProperties,
                             org.example.agent.tool.spi.ToolDescriptorRegistry toolDescriptorRegistry,
                             @org.springframework.beans.factory.annotation.Qualifier("toolExecutor")
-                            ExecutorService toolExecutor) {
+                            ExecutorService toolExecutor,
+                            IntentGate intentGate,
+                            LlmToolGate toolGate) {
         this(chatModel, toolGateway, toolCallbackProvider, sideEffectTracker,
                 contextBuilder, autoCompressionObserver, sessionStore,
                 budgetFactory, memoryTurnHook, longTermMaintainer, resultStore,
                 cliToolProperties, toolDescriptorRegistry, toolExecutor,
-                defaultBlockingExecutor());
+                intentGate, toolGate, defaultBlockingExecutor());
     }
 
     /**
@@ -122,7 +128,7 @@ public class AgentRuntimeImpl implements AgentRuntime {
                             ExecutorService blockingExecutor) {
         this(chatModel, toolGateway, toolCallbackProvider, sideEffectTracker,
                 contextBuilder, autoCompressionObserver, sessionStore,
-                budgetFactory, null, null, null, null, null, null, blockingExecutor);
+                budgetFactory, null, null, null, null, null, null, null, null, blockingExecutor);
     }
 
     public AgentRuntimeImpl(ChatModel chatModel,
@@ -139,6 +145,8 @@ public class AgentRuntimeImpl implements AgentRuntime {
                             org.example.agent.tool.config.CliToolProperties cliToolProperties,
                             org.example.agent.tool.spi.ToolDescriptorRegistry toolDescriptorRegistry,
                             ExecutorService toolExecutor,
+                            IntentGate intentGate,
+                            LlmToolGate toolGate,
                             ExecutorService blockingExecutor) {
         this.chatModel = chatModel;
         this.toolGateway = toolGateway;
@@ -156,6 +164,8 @@ public class AgentRuntimeImpl implements AgentRuntime {
         this.cliToolProperties = cliToolProperties;
         this.toolDescriptorRegistry = toolDescriptorRegistry;
         this.toolExecutor = toolExecutor;
+        this.intentGate = intentGate;
+        this.toolGate = toolGate;
     }
 
     private List<ToolCallback> currentToolCallbacks() {
@@ -178,7 +188,7 @@ public class AgentRuntimeImpl implements AgentRuntime {
     public AgentExecutionResult execute(AgentTask task) {
         ExecutionContext ctx = prepare(task);
         try {
-            ReActLoop.SubscribeResult sr = ctx.reactLoop.subscribe(task.getInput(), java.util.Map.of(), ctx.observers, ctx.signal);
+            ReActLoop.SubscribeResult sr = ctx.reactLoop.subscribe(task.getInput(), ctx.observers, ctx.signal);
             ctx.fullAnswer = sr.fullAnswer();
             persistTurn(task.getSessionId(), sr.turnMessages());
             postTurnMemory(task.getSessionId());
@@ -211,7 +221,7 @@ public class AgentRuntimeImpl implements AgentRuntime {
                 sink.onCancel(() -> handle.cancelNow());
 
                 try {
-                    ReActLoop.SubscribeResult sr = ctx.reactLoop.subscribe(task.getInput(), java.util.Map.of(), ctx.observers, ctx.signal);
+                    ReActLoop.SubscribeResult sr = ctx.reactLoop.subscribe(task.getInput(), ctx.observers, ctx.signal);
                     ctx.fullAnswer = sr.fullAnswer();
                     persistTurn(task.getSessionId(), sr.turnMessages());
                     postTurnMemory(task.getSessionId());
@@ -317,7 +327,8 @@ public class AgentRuntimeImpl implements AgentRuntime {
         DefaultReActLoopSignal signal = new DefaultReActLoopSignal();
         ReActLoop loop = new ReActLoop(executionId, chatModel, task, budget, toolGateway,
                 currentToolCallbacks(), sideEffectTracker, contextBuilder,
-                cliToolProperties, toolDescriptorRegistry, toolExecutor, resultStore);
+                cliToolProperties, toolDescriptorRegistry, toolExecutor, resultStore,
+                intentGate, toolGate);
         AgentExecutionRecord.Builder recordBuilder = AgentExecutionRecord.builder()
                 .executionId(executionId)
                 .task(task)

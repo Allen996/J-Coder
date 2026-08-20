@@ -24,12 +24,14 @@ import org.springframework.context.ConfigurableApplicationContext;
         "org.example.cli",
         "org.example.agent.core",
         "org.example.agent.tool",
-        "org.example.agent.context"
+        "org.example.agent.context",
+        "org.example.agent.intent"
 })
 @ConfigurationPropertiesScan(basePackages = {
         "org.example.cli",
         "org.example.agent.core",
-        "org.example.agent.tool"
+        "org.example.agent.tool",
+        "org.example.agent.intent"
 })
 public class Main {
 
