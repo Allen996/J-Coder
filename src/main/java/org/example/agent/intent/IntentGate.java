@@ -25,6 +25,8 @@ public class IntentGate {
     private final LlmIntentClassifier llm;
     private final IntentSignalExtractor signals;
     private final SlotCompletenessChecker slots;
+    private final SlotCompletenessValidator slotValidator; // 方案 B 新增
+    private final LlmConfidenceCalibrator calibrator;       // 方案 B 新增
     private final LocalIntentScorer scorer;
     private final IntentPrompter prompter;
     private final IntentFallbackPolicy fallbackPolicy;
@@ -40,6 +42,8 @@ public class IntentGate {
     public IntentGate(LlmIntentClassifier llm,
                       IntentSignalExtractor signals,
                       SlotCompletenessChecker slots,
+                      SlotCompletenessValidator slotValidator,
+                      LlmConfidenceCalibrator calibrator,
                       LocalIntentScorer scorer,
                       IntentPrompter prompter,
                       IntentFallbackPolicy fallbackPolicy,
@@ -51,6 +55,10 @@ public class IntentGate {
         this.llm = llm;
         this.signals = signals;
         this.slots = slots;
+        this.slotValidator = slotValidator == null ? new SlotCompletenessValidator() : slotValidator;
+        this.calibrator = calibrator == null
+                ? new LlmConfidenceCalibrator(new LlmConfidenceCalibrator.Calibration(false, 0, 0, 0, 0, 0, 0))
+                : calibrator;
         this.scorer = scorer;
         this.prompter = prompter;
         this.fallbackPolicy = fallbackPolicy;
@@ -78,8 +86,23 @@ public class IntentGate {
         // 2) 关键词 + 槽位 信号
         IntentSignalExtractor.SignalResult sig = signals.extract(userInput);
 
-        // 3) 融合打分
-        LocalIntentScorer.Scored scored = scorer.score(llmOut, sig, slots, userInput);
+        // 2.5) 方案 B:LLM conf 校准 —— 基于多路信号交叉验证压低盲猜
+        List<IntentLabel> llmCandidateLabels = llmOut.candidates() == null
+                ? List.of()
+                : llmOut.candidates().stream()
+                        .map(L1IntentResult.Candidate::label)
+                        .toList();
+        LlmConfidenceCalibrator.CalibratedResult calibrated = calibrator.calibrate(
+                llmOut.primary(),
+                llmOut.confidence(),
+                llmCandidateLabels,
+                sig.suggestedLabel(),
+                sig.keywordHits(),
+                sig.negativeSignals());
+
+        // 3) 融合打分 —— 把校准后的 llmConf 传给 scorer,避免 scorer 自己再校一遍
+        LocalIntentScorer.Scored scored = scorer.score(llmOut, sig, slots, userInput,
+                calibrated.value());
         L1IntentResult result = new L1IntentResult(
                 executionId,
                 scored.primary(),
@@ -89,7 +112,25 @@ public class IntentGate {
                 llmOut.negativeSignals() == null ? sig.negativeSignals() : llmOut.negativeSignals(),
                 llmOut.modelRouteHint(),
                 scored.fallback(),
-                scored.fallbackReason());
+                scored.fallbackReason(),
+                calibrated.appliedRules(),
+                calibrated.diagnostics());
+
+        // 3.5) 方案 B:slot 准入门槛 —— WRITE/RUN 缺必填槽 → conf cap 到 offer 以下 → 强制 OFFER
+        SlotCompletenessValidator.ValidationResult slotVR =
+                slotValidator.validate(result.primary(), result.slots());
+        boolean tierPinnedBySlot = !slotVR.allPassed()
+                && (result.primary() == IntentLabel.WRITE_PROJECT
+                        || result.primary() == IntentLabel.RUN_COMMAND);
+        if (tierPinnedBySlot && result.confidence() >= properties.l1().thresholds().offer()) {
+            double capped = Math.max(properties.l1().thresholds().offer() - 0.01,
+                    Math.min(result.confidence(), 0.59));
+            result = new L1IntentResult(
+                    result.executionId(), result.primary(), capped,
+                    result.candidates(), result.slots(), result.negativeSignals(),
+                    result.modelRouteHint(), result.fallback(), result.fallbackReason(),
+                    result.appliedCalibrationRules(), result.calibrationDiagnostics());
+        }
 
         // 4) 三档决策
         L1IntentResult.Tier tier = result.tier(properties.l1().thresholds());
@@ -114,7 +155,8 @@ public class IntentGate {
                 : new L1IntentResult(result.executionId(), chosen,
                         Math.max(result.confidence(), 0.85), result.candidates(),
                         result.slots(), result.negativeSignals(),
-                        result.modelRouteHint(), result.fallback(), result.fallbackReason());
+                        result.modelRouteHint(), result.fallback(), result.fallbackReason(),
+                        result.appliedCalibrationRules(), result.calibrationDiagnostics());
 
         // 5) 解析模型路由 → 实际 model name
         String resolvedModel = resolveModelName(finalResult.modelRouteHint());
@@ -132,8 +174,21 @@ public class IntentGate {
     private L1IntentResult classifyFresh(String executionId, String userInput) {
         LlmIntentClassifier.Outcome llmOut = llm.classify(executionId, userInput);
         IntentSignalExtractor.SignalResult sig = signals.extract(userInput);
-        LocalIntentScorer.Scored scored = scorer.score(llmOut, sig, slots, userInput);
-        return new L1IntentResult(
+        List<IntentLabel> llmCandidateLabels = llmOut.candidates() == null
+                ? List.of()
+                : llmOut.candidates().stream()
+                        .map(L1IntentResult.Candidate::label)
+                        .toList();
+        LlmConfidenceCalibrator.CalibratedResult calibrated = calibrator.calibrate(
+                llmOut.primary(),
+                llmOut.confidence(),
+                llmCandidateLabels,
+                sig.suggestedLabel(),
+                sig.keywordHits(),
+                sig.negativeSignals());
+        LocalIntentScorer.Scored scored = scorer.score(llmOut, sig, slots, userInput,
+                calibrated.value());
+        L1IntentResult result = new L1IntentResult(
                 executionId,
                 scored.primary(),
                 scored.confidence(),
@@ -142,7 +197,25 @@ public class IntentGate {
                 llmOut.negativeSignals() == null ? sig.negativeSignals() : llmOut.negativeSignals(),
                 llmOut.modelRouteHint(),
                 scored.fallback(),
-                scored.fallbackReason());
+                scored.fallbackReason(),
+                calibrated.appliedRules(),
+                calibrated.diagnostics());
+        // slot 准入门槛
+        SlotCompletenessValidator.ValidationResult slotVR =
+                slotValidator.validate(result.primary(), result.slots());
+        if (!slotVR.allPassed()
+                && (result.primary() == IntentLabel.WRITE_PROJECT
+                        || result.primary() == IntentLabel.RUN_COMMAND)
+                && result.confidence() >= properties.l1().thresholds().offer()) {
+            double capped = Math.max(properties.l1().thresholds().offer() - 0.01,
+                    Math.min(result.confidence(), 0.59));
+            result = new L1IntentResult(
+                    result.executionId(), result.primary(), capped,
+                    result.candidates(), result.slots(), result.negativeSignals(),
+                    result.modelRouteHint(), result.fallback(), result.fallbackReason(),
+                    result.appliedCalibrationRules(), result.calibrationDiagnostics());
+        }
+        return result;
     }
 
     private String resolveModelName(ModelRouteHint hint) {

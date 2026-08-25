@@ -1,0 +1,17 @@
+{
+  "schema" : "2",
+  "sessionId" : "72a562f6-7888-418d-887f-92d9ce7fdd7d",
+  "updatedAt" : "2026-08-24T11:01:52.289140900Z",
+  "summary" : "",
+  "topics" : [ ],
+  "keywords" : [ ],
+  "importance" : 3,
+  "crossSessionProgress" : {
+    "done" : [ ],
+    "inProgress" : [ ],
+    "blocked" : [ ]
+  },
+  "sessionSummary" : "会话刚开始，用户发送问候，助手回复并询问需求。",
+  "userFocus" : [ ],
+  "contextualRules" : [ ]
+}

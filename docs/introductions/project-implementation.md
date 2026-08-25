@@ -294,7 +294,7 @@ Slash 命令或 `TaskPlanTools` 创建 `TaskPlan` → `TaskScheduler` 校验 DAG
 
 1. `StaticLayer` 写入角色定义、可用工具清单（含 `FileTools`、`GrepTools`、`ShellTools`、`TaskPlanTools`）、修改代码时的推理约束和运行时元信息。
 2. `DynamicLayer` 写入本 session 的 `SessionMessageStore` 历史、`MidTermStore` 当前会话状态、`MemoryIndex` 暴露的可召回主题，以及当前活跃 `TaskPlan` 的占位（此刻还没有活动计划）。
-3. `ProjectScanner` 联合 `GitignoreMatcher` 扫描项目目录，结构化结果由 `ProjectContextCache` 提供给动态层，因此模型能看到当前路径与目标文件所在包结构，而无需每轮重复完整扫描。
+
 
 当静态、动态两层加上当前请求的估算 token 接近 `ContextBudgetPolicy` 阈值时，`ConversationCompressor` 会先尝试压缩 session 历史；本案例历史很短，不会触发压缩。
 

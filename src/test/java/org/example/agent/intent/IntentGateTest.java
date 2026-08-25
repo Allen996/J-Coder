@@ -34,7 +34,10 @@ class IntentGateTest {
         prompter.setSuppress(true); // 测试场景不读 stdin
         policy = new IntentFallbackPolicy(new CliIntentProperties());
         props = new CliIntentProperties();
-        gate = new IntentGate(stubLlm, signals, slots, scorer, prompter, policy, props,
+        gate = new IntentGate(stubLlm, signals, slots,
+                new SlotCompletenessValidator(),
+                new LlmConfidenceCalibrator(new LlmConfidenceCalibrator.Calibration(false, 0, 0, 0, 0, 0, 0)),
+                scorer, prompter, policy, props,
                 "qwen3.7-flash", "qwen3.7-plus", "qwen3.7-plus", List.of());
     }
 

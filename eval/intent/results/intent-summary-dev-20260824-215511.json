@@ -1,0 +1,105 @@
+{
+  "top1_accuracy" : 0.85,
+  "macro_f1" : 0.8643,
+  "fallback_rate" : 0.075,
+  "tier_direct" : 11,
+  "tier_offer" : 8,
+  "tier_clarify" : 21,
+  "tier_error" : 0,
+  "per_class" : {
+    "CHAT_QA" : {
+      "precision" : 0.6667,
+      "recall" : 0.8571,
+      "f1" : 0.75,
+      "support" : 7.0
+    },
+    "OFF_TOPIC" : {
+      "precision" : 0.625,
+      "recall" : 0.7143,
+      "f1" : 0.6667,
+      "support" : 7.0
+    },
+    "PLANNING" : {
+      "precision" : 1.0,
+      "recall" : 1.0,
+      "f1" : 1.0,
+      "support" : 6.0
+    },
+    "READ_CODE" : {
+      "precision" : 1.0,
+      "recall" : 0.625,
+      "f1" : 0.7692,
+      "support" : 8.0
+    },
+    "RUN_COMMAND" : {
+      "precision" : 1.0,
+      "recall" : 1.0,
+      "f1" : 1.0,
+      "support" : 6.0
+    },
+    "WRITE_PROJECT" : {
+      "precision" : 1.0,
+      "recall" : 1.0,
+      "f1" : 1.0,
+      "support" : 6.0
+    }
+  },
+  "confusion" : {
+    "CHAT_QA" : {
+      "CHAT_QA" : 6,
+      "OFF_TOPIC" : 1
+    },
+    "OFF_TOPIC" : {
+      "CHAT_QA" : 2,
+      "OFF_TOPIC" : 5
+    },
+    "PLANNING" : {
+      "PLANNING" : 6
+    },
+    "READ_CODE" : {
+      "CHAT_QA" : 1,
+      "OFF_TOPIC" : 2,
+      "READ_CODE" : 5
+    },
+    "RUN_COMMAND" : {
+      "RUN_COMMAND" : 6
+    },
+    "WRITE_PROJECT" : {
+      "WRITE_PROJECT" : 6
+    }
+  },
+  "off_topic_subset" : {
+    "support" : 7,
+    "recall" : 0.7143,
+    "top1" : 0.7143
+  },
+  "calibration_rules_triggered" : {
+    "CONFLICT_PENALTY" : 2,
+    "FLOOR_NO_PRIMARY" : 3,
+    "HIGH_CLIP" : 35,
+    "NONE" : 1,
+    "NO_EVIDENCE_CAP" : 6
+  },
+  "slot_gate" : {
+    "total_triggered" : 12,
+    "total_write_run" : 12
+  },
+  "generated_at" : "20260824-215511",
+  "split" : "dev",
+  "n_rows" : 40,
+  "llm_mode" : "REAL",
+  "scoring_weights" : {
+    "wLlm" : 0.6,
+    "wKeyword" : 0.2,
+    "wSlot" : 0.2,
+    "penConflict" : 0.15,
+    "penNegative" : 0.1
+  },
+  "wLlm" : 0.6,
+  "wKeyword" : 0.2,
+  "wSlot" : 0.2,
+  "penConflict" : 0.15,
+  "penNegative" : 0.1,
+  "per_row_report" : "intent-per-row-dev-20260824-215511.jsonl",
+  "gate_strict" : false
+}

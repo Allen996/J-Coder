@@ -12,92 +12,99 @@ import java.util.Map;
  * 融合打分器。设计稿 §5.3:
  *
  * <pre>
- * final_conf = 0.6 * llm_conf
- *            + 0.2 * keyword_match_score
- *            + 0.2 * slot_completeness_score
- *            - 0.15 if (rule_signal 强冲突 LLM 选择) else 0
- *            - 0.10 if negative_signals 非空 else 0
+ * final_conf = w_llm * llm_conf
+ *            + w_keyword * keyword_match_score
+ *            + w_slot * slot_completeness_score
+ *            - pen_conflict if (rule_signal 强冲突 LLM 选择) else 0
+ *            - pen_negative if negative_signals 非空 else 0
  * </pre>
  *
+ * <p><b>方案 B 调整</b>:
+ * <ul>
+ *   <li>{@code score()} 多收一个 {@code llmConfOverride} 参数,由 {@code IntentGate}
+ *       把 {@link LlmConfidenceCalibrator} 校准后的 conf 传进来。
+ *       {@code <0} 表示使用 LLM 原始 conf (历史行为)。</li>
+ *   <li>{@code slotScore} <b>退出加权</b>(wSlot 不再乘进 final_conf),改作观测字段。
+ *       slot 完整性不再影响分类置信度,而是改为由 {@code SlotCompletenessValidator}
+ *       作为 tier 准入门槛判定(在 IntentGate 里做)。</li>
+ *   <li>{@code finalConf} 仍归一化到 [0,1]:扣除 wSlot 后剩余权重和 = wLlm + wKeyword,
+ *       用 (wLlm + wKeyword) 做归一化,使新旧公式在同一区间可比。</li>
+ * </ul>
+ *
+ * <p><b>权重从 {@link CliIntentProperties.Scoring} 读取</b>(默认 0.6 / 0.2 / 0.2 / 0.15 / 0.10,
+ * 保持历史行为);所有调整通过 {@code application.yml} 的 {@code cli.intent.l1.scoring} 节点,
+ * 在 {@code eval/intent/golden.jsonl} 的 train 上做网格搜索,dev 选超参,test 只报一次。
+ *
+ * <h2>可观测的中间信号</h2>
+ *
+ * <p>{@link Scored} 现在额外带 {@code llmConf} / {@code keywordScore} / {@code slotScore} /
+ * {@code conflict} / {@code negative} / {@code scoringWeights},方便在 {@code /intent-stats}
+ * 与 eval 报告中看到每条数据的真实来源,便于诊断"为什么这条被分到 X"。
+ *
  * <p>纯规则实现,首期够用(设计稿 §12 待决项 1:不用本地 ML 模型)。
- *
- * <h2>权重与扣分项的取值依据</h2>
- *
- * <p>设计稿 §5 引子明确写"LLM 倾向于高置信度,不要直接相信 LLM 给出的数字",
- * 但 LLM 又是上下文理解最丰富、信号最贵的来源。所以权重需要同时满足两条约束:
- *
- * <ol>
- *   <li><b>LLM 主导但不独断</b>:给 LLM 过半的权重(60%)是承认它的信号质量,
- *       但留出 40% 给廉价结构化信号做修正——这样 LLM 严重错判时,
- *       规则+槽位有足够力量把 final_conf 拉离 direct 档。</li>
- *   <li><b>规则+槽位 = 0.4,与 LLM 形成 6:4 杠杆</b>:关键词与槽位都是确定性的
- *       0/1 区间信号,可独立校准,各占 20%,合计 40%。三段权重和恰为 1.0,
- *       在无任何扣分时,final_conf 自然落在 [0, 1] 区间,clamp 兜底。</li>
- * </ol>
- *
- * <h3>冲突扣分 0.15</h3>
- *
- * <p>WRITE/READ 强冲突(规则强信号指向 READ,LLM 选 WRITE,或反过来)
- * 是最危险的误判:用户嘴上说"看",模型理解成"改",会直接触发写工具。
- * 0.15 这个值是按"direct→offer 临界"反推的:
- *
- * <ul>
- *   <li>理想情况 LLM 0.95 + 规则 1.0 + 槽位 1.0:0.6·0.95 + 0.2·1.0 + 0.2·1.0 = 0.97</li>
- *   <li>扣 0.15 → 0.82,正好从 direct(≥0.85)落到 offer(0.60–0.85)档——
- *       设计想要的"在直接执行和反问之间再让用户确认一次"</li>
- *   <li>又不至于跌破 0.60 进入反问档,避免一次轻量查询被反复打扰</li>
- * </ul>
- *
- * <h3>负向扣分 0.10</h3>
- *
- * <p>negative_signals("别/不要/先别/just/only")含义是"用户已经主动声明了边界",
- * 这时 LLM 即使选了 WRITE 也可能确实是想写,只是要"先别"。
- * 0.10 故意比冲突扣分轻:
- *
- * <ul>
- *   <li>足以把一个本来 direct 的请求降一档到 offer(让用户口头 ack 一下意图)</li>
- *   <li>不至于到反问档(用户已经表达得够清楚了,继续问是骚扰)</li>
- * </ul>
- *
- * <h3>校准锚点(对应 {@code LocalIntentScorerTest})</h3>
- *
- * <ul>
- *   <li>highConfidencePath:0.6·0.95 + 0.2·0.9 + 0.2·1.0 = 0.95, &gt; 0.85 ✓ direct</li>
- *   <li>ruleConflictPenalty:0.6·0.9 + 0.2·0.9 + 0.2·1.0 − 0.15 = 0.77, &lt; 0.85 ✓ offer</li>
- *   <li>negativeSignalPenalty:0.6·0.9 + 0.2·0.9 + 0.2·1.0 − 0.10 = 0.82, &lt; 0.9 ✓</li>
- * </ul>
- *
- * <p>调整建议:这些数字目前来自经验调参,不是网格搜索或回归拟合。
- * 真实使用中应通过 {@code /intent-stats} 收集 final_conf 与用户最终选择(label)
- * 的对齐率,反推最优权重——本类暂不引入自适应学习,首期目标是"可解释、可回滚"。
  */
 @Component
 public class LocalIntentScorer {
 
-    private static final double W_LLM = 0.6;
-    private static final double W_KEYWORD = 0.2;
-    private static final double W_SLOT = 0.2;
-    private static final double PEN_CONFLICT = 0.15;
-    private static final double PEN_NEGATIVE = 0.10;
+    private final CliIntentProperties properties;
 
+    public LocalIntentScorer(CliIntentProperties properties) {
+        this.properties = properties;
+    }
+
+    /** 便捷构造器(供不通过 Spring 的单元测试使用默认权重)。 */
+    public LocalIntentScorer() {
+        this(new CliIntentProperties());
+    }
+
+    private CliIntentProperties.Scoring w() {
+        return properties == null || properties.l1() == null || properties.l1().scoring() == null
+                ? new CliIntentProperties.Scoring(0.6, 0.2, 0.2, 0.15, 0.10)
+                : properties.l1().scoring();
+    }
+
+    /**
+     * 历史入口:不传 calibrated conf(llmConfOverride < 0),走原始 LLM conf。
+     * 保留 4-arg 形式给不调用 calibrator 的旧测试/工具使用。
+     */
     public Scored score(LlmIntentClassifier.Outcome llm,
                         IntentSignalExtractor.SignalResult signal,
                         SlotCompletenessChecker slots,
                         String userInput) {
+        return score(llm, signal, slots, userInput, -1.0);
+    }
+
+    /**
+     * 主入口。{@code llmConfOverride} ∈ [0,1] 表示校准后的 LLM conf(<0 表示用 LLM 原始 conf)。
+     * 方案 B:IntentGate 在调用本方法前已经把 calibrator 跑过,把 calibrated.value() 传进来。
+     */
+    public Scored score(LlmIntentClassifier.Outcome llm,
+                        IntentSignalExtractor.SignalResult signal,
+                        SlotCompletenessChecker slots,
+                        String userInput,
+                        double llmConfOverride) {
 
         if (llm == null || llm.degraded() || llm.primary() == null) {
-            // 整次分类视作失败 —— 直接走降级路径,这里产出 OFF_TOPIC / 0.5
+            // 整次分类视作失败 —— 直接走降级路径。
+            // 方案 B:conf=0.0(不是 0.5),让 tier 自然落到 CLARIFY(< 0.60),
+            // 并在评测器里作为"未决策"被排除,不计入 top-1 / OFF_TOPIC subset。
+            // 历史值 0.5 会让 OFF_TOPIC 的兜底 label 算成 true positive,
+            // 反而在 LLM 超时场景下污染 OFF_TOPIC 召回率统计。
             String reason = llm == null
                     ? "llm null"
                     : (llm.reason() == null || llm.reason().isBlank() ? "llm degraded" : llm.reason());
-            return new Scored(IntentLabel.OFF_TOPIC, 0.5,
-                    List.of(new L1IntentResult.Candidate(IntentLabel.OFF_TOPIC, 0.5)),
-                    true, reason);
+            return new Scored(IntentLabel.OFF_TOPIC, 0.0,
+                    List.of(new L1IntentResult.Candidate(IntentLabel.OFF_TOPIC, 0.0)),
+                    true, reason, 0.0, 0.5, 0.5, false, false, w());
         }
 
         IntentLabel label = llm.primary();
-        double llmConf = clamp(llm.confidence());
+        // 方案 B:优先使用 calibrated conf;<0 fallback 到原始 LLM conf
+        double llmConf = (llmConfOverride >= 0)
+                ? clamp(llmConfOverride)
+                : clamp(llm.confidence());
         double keywordScore = signal == null ? 0.5 : clamp(signal.keywordMatchScore());
+        // 方案 B:slot 退出加权 —— 仍计算 completeness 作为观测,但不进入 final_conf
         double slotScore = slots == null ? 0.5 : clamp(slots.completeness(label, llm.slots(), userInput));
 
         boolean conflict = signal != null
@@ -106,18 +113,21 @@ public class LocalIntentScorer {
                 && isWriteReadConflict(signal.suggestedLabel(), label);
         boolean negative = signal != null && signal.negativeSignals() != null && !signal.negativeSignals().isEmpty();
 
-        double finalConf = W_LLM * llmConf
-                + W_KEYWORD * keywordScore
-                + W_SLOT * slotScore
-                - (conflict ? PEN_CONFLICT : 0.0)
-                - (negative ? PEN_NEGATIVE : 0.0);
-        finalConf = clamp(finalConf);
+        CliIntentProperties.Scoring sc = w();
+        // 方案 B:删除 wSlot 项,只用 wLlm + wKeyword 加权,然后归一化到 [0,1]
+        double weightedSum = sc.wLlm() * llmConf
+                + sc.wKeyword() * keywordScore
+                - (conflict ? sc.penConflict() : 0.0)
+                - (negative ? sc.penNegative() : 0.0);
+        double weightTotal = sc.wLlm() + sc.wKeyword(); // = 0.8 在默认配置下
+        double finalConf = (weightTotal > 0) ? clamp(weightedSum / weightTotal) : clamp(weightedSum);
 
         List<L1IntentResult.Candidate> candidates = mergeCandidates(llm, signal);
         if (candidates.isEmpty()) {
             candidates = List.of(new L1IntentResult.Candidate(label, finalConf));
         }
-        return new Scored(label, finalConf, candidates, false, null);
+        return new Scored(label, finalConf, candidates, false, null,
+                llmConf, keywordScore, slotScore, conflict, negative, sc);
     }
 
     /**
@@ -164,11 +174,36 @@ public class LocalIntentScorer {
         return v;
     }
 
+    /**
+     * 打分结果 + 中间信号,供 eval 报告与 /intent-stats 消费。
+     * 原有字段(primary/confidence/candidates/fallback/fallbackReason)保持兼容。
+     */
     public record Scored(
             IntentLabel primary,
             double confidence,
             List<L1IntentResult.Candidate> candidates,
             boolean fallback,
-            String fallbackReason
-    ) {}
+            String fallbackReason,
+            /** 原始 LLM 自评置信度;fallback 时为 0.5。 */
+            double llmConf,
+            /** 关键词层打分;无信号时为 0.5。 */
+            double keywordScore,
+            /** 槽位完整度;无信号时为 0.5。 */
+            double slotScore,
+            /** 是否触发 WRITE/READ 强冲突扣分。 */
+            boolean conflict,
+            /** 是否触发负向信号扣分。 */
+            boolean negative,
+            /** 本次打分实际使用的权重(可观测,避免 debug 时改 yml 看不到效果)。 */
+            CliIntentProperties.Scoring scoringWeights
+    ) {
+        /** 兼容旧调用方(不传中间信号)。 */
+        public Scored(IntentLabel primary, double confidence,
+                      List<L1IntentResult.Candidate> candidates,
+                      boolean fallback, String fallbackReason) {
+            this(primary, confidence, candidates, fallback, fallbackReason,
+                    0.5, 0.5, 0.5, false, false,
+                    new CliIntentProperties.Scoring(0.6, 0.2, 0.2, 0.15, 0.10));
+        }
+    }
 }

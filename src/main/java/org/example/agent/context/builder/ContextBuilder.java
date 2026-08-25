@@ -498,7 +498,7 @@ public class ContextBuilder {
 
         public ContextOverflowException(String message, long used, long reserved) {
             super(message);
-            this.used = used;
+            this.used = used; //已用
             this.reserved = reserved;
         }
 

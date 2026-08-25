@@ -73,7 +73,7 @@ class LocalIntentScorerTest {
     }
 
     @Test
-    @DisplayName("LLM 降级(degraded=true) → 返回 OFF_TOPIC fallback,conf=0.5")
+    @DisplayName("LLM 降级(degraded=true) → 返回 OFF_TOPIC fallback,conf=0.0(方案 B 第二阶段)")
     void degradedLlm() {
         LlmIntentClassifier.Outcome llm = LlmIntentClassifier.Outcome.fallback("parse error");
         IntentSignalExtractor.SignalResult sig = new IntentSignalExtractor.SignalResult(
@@ -82,7 +82,9 @@ class LocalIntentScorerTest {
         LocalIntentScorer.Scored r = scorer.score(llm, sig, slots, "改一下");
         assertEquals(IntentLabel.OFF_TOPIC, r.primary());
         assertTrue(r.fallback());
-        assertEquals(0.5, r.confidence(), 0.001);
+        // 方案 B 第二阶段:fallback conf 从 0.5 改成 0.0,
+        // 让评测器视为"未决策"不计入 top-1 分母。
+        assertEquals(0.0, r.confidence(), 0.001);
     }
 
     @Test

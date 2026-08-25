@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.agent.tool.config.CliToolProperties;
 import org.example.agent.tool.spi.ToolDescriptor;
 import org.example.cli.session.SessionState;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
@@ -42,6 +43,7 @@ public class CliAuthorizationGate implements AuthorizationGate {
     private final PrintWriter out;
     private final Set<String> sessionAllowed = ConcurrentHashMap.newKeySet();
 
+    @Autowired
     public CliAuthorizationGate(CliToolProperties properties, SessionState session) {
         this(properties, session, System.in, new PrintWriter(System.out, true, StandardCharsets.UTF_8));
     }

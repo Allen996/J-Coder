@@ -1,0 +1,98 @@
+{
+  "top1_accuracy" : 0.775,
+  "macro_f1" : 0.7696,
+  "fallback_rate" : 0.25,
+  "tier_direct" : 86,
+  "tier_offer" : 57,
+  "tier_clarify" : 57,
+  "tier_error" : 0,
+  "per_class" : {
+    "CHAT_QA" : {
+      "precision" : 0.9333,
+      "recall" : 0.7568,
+      "f1" : 0.8358,
+      "support" : 37.0
+    },
+    "OFF_TOPIC" : {
+      "precision" : 0.7,
+      "recall" : 0.9211,
+      "f1" : 0.7955,
+      "support" : 38.0
+    },
+    "PLANNING" : {
+      "precision" : 1.0,
+      "recall" : 0.9333,
+      "f1" : 0.9655,
+      "support" : 30.0
+    },
+    "READ_CODE" : {
+      "precision" : 0.587,
+      "recall" : 0.8182,
+      "f1" : 0.6835,
+      "support" : 33.0
+    },
+    "RUN_COMMAND" : {
+      "precision" : 0.8065,
+      "recall" : 0.8929,
+      "f1" : 0.8475,
+      "support" : 28.0
+    },
+    "WRITE_PROJECT" : {
+      "precision" : 0.8,
+      "recall" : 0.3529,
+      "f1" : 0.4898,
+      "support" : 34.0
+    }
+  },
+  "confusion" : {
+    "CHAT_QA" : {
+      "CHAT_QA" : 28,
+      "READ_CODE" : 9
+    },
+    "OFF_TOPIC" : {
+      "CHAT_QA" : 1,
+      "OFF_TOPIC" : 35,
+      "WRITE_PROJECT" : 2
+    },
+    "PLANNING" : {
+      "OFF_TOPIC" : 1,
+      "PLANNING" : 28,
+      "WRITE_PROJECT" : 1
+    },
+    "READ_CODE" : {
+      "CHAT_QA" : 1,
+      "OFF_TOPIC" : 3,
+      "READ_CODE" : 27,
+      "RUN_COMMAND" : 2
+    },
+    "RUN_COMMAND" : {
+      "OFF_TOPIC" : 2,
+      "READ_CODE" : 1,
+      "RUN_COMMAND" : 25
+    },
+    "WRITE_PROJECT" : {
+      "OFF_TOPIC" : 9,
+      "READ_CODE" : 9,
+      "RUN_COMMAND" : 4,
+      "WRITE_PROJECT" : 12
+    }
+  },
+  "generated_at" : "20260824-170111",
+  "split" : "train",
+  "n_rows" : 200,
+  "llm_mode" : "FAKE_HEURISTIC",
+  "scoring_weights" : {
+    "wLlm" : 0.7,
+    "wKeyword" : 0.15,
+    "wSlot" : 0.15,
+    "penConflict" : 0.15,
+    "penNegative" : 0.05
+  },
+  "wLlm" : 0.7,
+  "wKeyword" : 0.15,
+  "wSlot" : 0.15,
+  "penConflict" : 0.15,
+  "penNegative" : 0.05,
+  "per_row_report" : "intent-per-row-train-20260824-170111.jsonl",
+  "gate_strict" : false
+}

@@ -1,0 +1,104 @@
+{
+  "top1_accuracy" : 0.8462,
+  "macro_f1" : 0.8571,
+  "fallback_rate" : 0.1333,
+  "tier_direct" : 13,
+  "tier_offer" : 12,
+  "tier_clarify" : 27,
+  "tier_error" : 0,
+  "per_class" : {
+    "CHAT_QA" : {
+      "precision" : 0.5556,
+      "recall" : 1.0,
+      "f1" : 0.7143,
+      "support" : 10.0
+    },
+    "OFF_TOPIC" : {
+      "precision" : 1.0,
+      "recall" : 0.2727,
+      "f1" : 0.4286,
+      "support" : 11.0
+    },
+    "PLANNING" : {
+      "precision" : 1.0,
+      "recall" : 1.0,
+      "f1" : 1.0,
+      "support" : 7.0
+    },
+    "READ_CODE" : {
+      "precision" : 1.0,
+      "recall" : 1.0,
+      "f1" : 1.0,
+      "support" : 9.0
+    },
+    "RUN_COMMAND" : {
+      "precision" : 1.0,
+      "recall" : 1.0,
+      "f1" : 1.0,
+      "support" : 8.0
+    },
+    "WRITE_PROJECT" : {
+      "precision" : 1.0,
+      "recall" : 1.0,
+      "f1" : 1.0,
+      "support" : 7.0
+    }
+  },
+  "confusion" : {
+    "CHAT_QA" : {
+      "CHAT_QA" : 10
+    },
+    "OFF_TOPIC" : {
+      "CHAT_QA" : 8,
+      "OFF_TOPIC" : 3
+    },
+    "PLANNING" : {
+      "PLANNING" : 7
+    },
+    "READ_CODE" : {
+      "READ_CODE" : 9
+    },
+    "RUN_COMMAND" : {
+      "RUN_COMMAND" : 8
+    },
+    "WRITE_PROJECT" : {
+      "WRITE_PROJECT" : 7
+    }
+  },
+  "no_decision_stats" : {
+    "count" : 8,
+    "excluded_from_top1_denominator" : true
+  },
+  "off_topic_subset" : {
+    "support" : 11,
+    "recall" : 0.2727,
+    "top1" : 0.2727
+  },
+  "calibration_rules_triggered" : {
+    "CONFLICT_PENALTY" : 6,
+    "HIGH_CLIP" : 52,
+    "NO_EVIDENCE_CAP" : 11
+  },
+  "slot_gate" : {
+    "total_triggered" : 14,
+    "total_write_run" : 15
+  },
+  "generated_at" : "20260824-221343",
+  "split" : "test",
+  "n_rows" : 60,
+  "llm_mode" : "REAL",
+  "scoring_weights" : {
+    "wLlm" : 0.6,
+    "wKeyword" : 0.2,
+    "wSlot" : 0.2,
+    "penConflict" : 0.15,
+    "penNegative" : 0.1
+  },
+  "wLlm" : 0.6,
+  "wKeyword" : 0.2,
+  "wSlot" : 0.2,
+  "penConflict" : 0.15,
+  "penNegative" : 0.1,
+  "per_row_report" : "intent-per-row-test-20260824-221343.jsonl",
+  "gate_strict" : false
+}

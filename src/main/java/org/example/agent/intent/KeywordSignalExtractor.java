@@ -9,19 +9,24 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * 中文优先的关键词信号提取器。设计稿 §5.1。
  *
- * <p>每类标签一组关键词,命中越多 score 越高;同时扫反向前缀(别 / 不要 / 先别)。
- * 英文走降级路径:不做匹配,直接返回 suggestedLabel=null + score=0.5。
+ * <p><b>Baseline 版本</b>(用于 L1 调参 ground truth):与最初的实现对齐 —
+ * 关键词纯 substring 命中、按命中数量 pickStrongest、无 per-word 权重。
  *
- * <p>这层不参与最终打分,只给 scorer 提供辅助信号。
+ * <p>只在负向词检测上做了一个 bug 修复:单字 "别" 必须处于"独立 token"位置
+ * (前后不是汉字)才算负向信号,避免 "区别/差别/鉴别" 等概念词里的 "别" 误命中。
+ * 这是原版会让 CHAT_QA 漏判的具体来源。
+ *
+ * <p>后续如果要在词典侧调优,必须用 golden.jsonl 的 train 上 grid-search,
+ * dev 上选超参,test 上只报一次。
  */
 @Component
 public class KeywordSignalExtractor implements IntentSignalExtractor {
 
-    /** 每类关键词(中文为主,英文为辅)。 */
     private static final Map<IntentLabel, List<String>> KEYWORDS = new HashMap<>();
     static {
         KEYWORDS.put(IntentLabel.READ_CODE, List.of(
@@ -51,8 +56,15 @@ public class KeywordSignalExtractor implements IntentSignalExtractor {
     }
 
     private static final List<String> NEGATIVE_TOKENS = List.of(
-            "别", "不要", "先别", "千万别", "only", "just", "do not",
+            "不要", "先别", "千万别", "only", "just", "do not",
             "don't", "不要写", "不要改", "不要动"
+    );
+
+    /**
+     * "别" 单独成词(前后不是汉字)才算负向信号,避免 "区别/差别/鉴别/特别" 误命中。
+     */
+    private static final Pattern STANDALONE_BIE = Pattern.compile(
+            "(?<![\\u4e00-\\u9fff])别(?![\\u4e00-\\u9fff])"
     );
 
     private static final Set<String> WRITE_ONLY_MODIFIERS = new HashSet<>(Arrays.asList(
@@ -82,6 +94,9 @@ public class KeywordSignalExtractor implements IntentSignalExtractor {
             if (lower.contains(neg.toLowerCase())) {
                 negatives.add(neg);
             }
+        }
+        if (STANDALONE_BIE.matcher(userInput).find()) {
+            negatives.add("别");
         }
 
         IntentLabel suggested = pickStrongest(hits);
@@ -118,7 +133,6 @@ public class KeywordSignalExtractor implements IntentSignalExtractor {
         return all;
     }
 
-    /** 静态导出,供测试 / 文档使用。 */
     public static Set<String> writeOnlyModifiers() {
         return WRITE_ONLY_MODIFIERS;
     }

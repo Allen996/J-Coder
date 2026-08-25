@@ -32,7 +32,7 @@ class IntentFallbackPolicyTest {
     @DisplayName("cli.intent.l1.enabled=false → L1 禁用,L2 仍启用")
     void l1OffButL2On() {
         CliIntentProperties props = new CliIntentProperties(true,
-                new CliIntentProperties.L1(false, 3000L, null, null),
+                new CliIntentProperties.L1(false, 3000L, null, null, null, null),
                 new CliIntentProperties.L2(true, 2000L, null),
                 null, null);
         IntentFallbackPolicy p = new IntentFallbackPolicy(props);
@@ -42,12 +42,14 @@ class IntentFallbackPolicyTest {
     }
 
     @Test
-    @DisplayName("buildFallback 总是 OFF_TOPIC / conf=0.5 / fallback=true")
+    @DisplayName("buildFallback 总是 OFF_TOPIC / conf=0.0 / fallback=true(方案 B 第二阶段)")
     void fallbackShape() {
         IntentFallbackPolicy p = new IntentFallbackPolicy(new CliIntentProperties());
         L1IntentResult r = p.buildFallback("exec-x", "parse error");
         assertEquals(IntentLabel.OFF_TOPIC, r.primary());
-        assertEquals(0.5, r.confidence(), 0.001);
+        // 方案 B 第二阶段:fallback conf 从 0.5 改成 0.0,
+        // 让评测器视为"未决策"不计入 top-1。
+        assertEquals(0.0, r.confidence(), 0.001);
         assertTrue(r.fallback());
         assertEquals("parse error", r.fallbackReason());
     }

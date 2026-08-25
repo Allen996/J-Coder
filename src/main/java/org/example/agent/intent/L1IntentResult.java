@@ -9,6 +9,10 @@ import java.util.Map;
  * <p>由 {@link LlmIntentClassifier} 产出 → {@link LocalIntentScorer} 融合关键词/槽位
  * 信号 → 形成最终 confidence。{@code primary} 与 {@code confidence} 都是融合后的结果。
  *
+ * <p><b>方案 B 扩展</b>:新增 {@code appliedCalibrationRules} / {@code calibrationDiagnostics}
+ * 两个字段,记录 {@link LlmConfidenceCalibrator} 实际触发的规则及每步 conf 变化。
+ * 历史代码构造 L1IntentResult 时,这两个字段传 {@code List.of()} / {@code Map.of()} 即可。
+ *
  * @param executionId   本次会话的 executionId(用于日志关联)
  * @param primary       融合后的主意图
  * @param confidence    融合后的最终置信度,0..1
@@ -18,6 +22,8 @@ import java.util.Map;
  * @param modelRouteHint 路由建议
  * @param fallback      是否经过降级(解析失败 / 超时 → OFF_TOPIC)
  * @param fallbackReason 降级原因,可空
+ * @param appliedCalibrationRules 校准器实际触发的规则名(空 list 表示未校准或 disabled)
+ * @param calibrationDiagnostics  校准步骤诊断:{raw, after_high_clip, ..., final}
  */
 public record L1IntentResult(
         String executionId,
@@ -28,8 +34,26 @@ public record L1IntentResult(
         List<String> negativeSignals,
         ModelRouteHint modelRouteHint,
         boolean fallback,
-        String fallbackReason
+        String fallbackReason,
+        List<String> appliedCalibrationRules,
+        Map<String, Double> calibrationDiagnostics
 ) {
+
+    /**
+     * 向后兼容构造器:9-arg 旧 API 仍可用,自动把校准字段填为空。
+     */
+    public L1IntentResult(String executionId,
+                          IntentLabel primary,
+                          double confidence,
+                          List<Candidate> candidates,
+                          Map<String, Object> slots,
+                          List<String> negativeSignals,
+                          ModelRouteHint modelRouteHint,
+                          boolean fallback,
+                          String fallbackReason) {
+        this(executionId, primary, confidence, candidates, slots, negativeSignals,
+                modelRouteHint, fallback, fallbackReason, List.of(), Map.of());
+    }
 
     /** Top-K 候选(label + 融合前 score)。 */
     public record Candidate(IntentLabel label, double score) {}

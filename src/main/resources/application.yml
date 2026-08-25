@@ -1,13 +1,19 @@
 spring:
+  config:
+    import: optional:file:.env[.properties]
+
   main:
     web-application-type: none
     banner-mode: off
   ai:
     dashscope:
-      api-key: ${DASHSCOPE_API_KEY:sk-ea7271e381764060a834b759291252a4}
+      # 主对话 LLM（Spring AI 自动装配,自动读取 base-url）
+      # API key 必须通过环境变量 DASHSCOPE_API_KEY 提供；本地调试可直接 export。
+      api-key: ${DASHSCOPE_API_KEY}
+      base-url: ${DASHSCOPE_BASE_URL}
       chat:
         options:
-          model: ${DASHSCOPE_MODEL:qwen3.7-plus-2026-05-26}
+          model: ${DASHSCOPE_MODEL:qwen3.8-max}
 
 agent:
   project-root: ${AGENT_PROJECT_ROOT:}
@@ -16,7 +22,7 @@ agent:
     # 仅用于本次 eval,不是产品默认值。
     compression-threshold: 0.20
     keep-recent-rounds: 8
-    
+
   model:
     http:
       # 底层 OkHttp / HttpURLConnection socket 超时
@@ -25,8 +31,13 @@ agent:
       # 业务总时长封顶（Future.get），须 >= read-timeout-ms × (1 + retry) 才能让 socket 超时先生效
       call-timeout-ms: 600000
   memory:
-    api-key: ${AGENT_MEMORY_API_KEY:${DASHSCOPE_API_KEY:sk-ea7271e381764060a834b759291252a4}}
-    model: ${AGENT_MEMORY_MODEL:qwen3.7-flash}
+    # 记忆摘要模型（独立 bean,由 LightweightChatModelConfig 直接构建,不走 Spring AI 自动装配）
+    # 关键点：必须显式提供 base-url，否则 DashScopeApi 会用官方默认端点，
+    # 你配置的私有网关 / 代理 / 兼容层就不会被使用。
+    # 优先级：DASHSCOPE_BASE_URL 环境变量 > agent.memory.base-url 配置 > 默认官方端点
+    api-key: ${AGENT_MEMORY_API_KEY:${DASHSCOPE_API_KEY}}
+    base-url: ${AGENT_MEMORY_BASE_URL:${DASHSCOPE_BASE_URL}}
+    model: ${AGENT_MEMORY_MODEL:qwen3.8-max}
     http:
       connect-timeout-ms: 10000
       read-timeout-ms: 60000
@@ -50,12 +61,33 @@ cli:
     enabled: true
     l1:
       enabled: true
-      timeout-ms: 3000
+      timeout-ms: 6000
       thresholds:
         direct: 0.85
         offer: 0.60
         rewrite-cap: 0.15
       allow-labels: []
+      # L1 打分权重(final_conf = wLlm*llmConf + wKeyword*keywordScore + wSlot*slotScore
+      #            - penConflict if WRITE/READ 强冲突 else 0
+      #            - penNegative if negative_signals 非空 else 0)
+      # 默认值与历史 LocalIntentScorer 常量一致;调参参考 eval/intent/TUNING-REPORT.md
+      # 在 train 上做网格搜索,dev 上选超参,test 上只报一次最终数字。
+      scoring:
+        w-llm: 0.6
+        w-keyword: 0.2
+        w-slot: 0.2
+        pen-conflict: 0.15
+        pen-negative: 0.10
+      # 方案 B:LLM conf 校准器(见 LlmConfidenceCalibrator)
+      # 关掉 calibration.enabled 即可回退到原始 LLM conf,等价于方案 A。
+      calibration:
+        enabled: true
+        high-clip: 0.85
+        neg-override-cap: 0.40
+        conflict-delta: 0.25
+        conflict-raw-threshold: 0.70
+        no-evidence-cap: 0.60
+        floor: 0.05
     l2:
       enabled: true
       timeout-ms: 2000
@@ -65,9 +97,12 @@ cli:
         block-conflict-gap: 0.15
         block-floor: 0.55
     model-routing:
-      light: qwen3.7-flash
-      code: qwen3.7-plus
-      general: qwen3.7-plus
+      # ⚠️ 重要：所有模型必须是你的 DASHSCOPE_API_KEY + base-url 实际支持的模型
+      # 如果你的私有网关/Key 只支持 qwen3.8-max，则三档都用同一个模型
+      # 如果后续开通了其他模型权限，再按需拆分以节省成本
+      light: ${INTENT_MODEL_LIGHT:qwen3.6-flash}
+      code: ${INTENT_MODEL_CODE:qwen3.8-max}
+      general: ${INTENT_MODEL_GENERAL:qwen3.8-max}
     fallback:
       enabled: true
       default-label: OFF_TOPIC

@@ -1,7 +1,7 @@
 ---
 schema: 2
-updatedAt: "2026-08-16T14:33:17.332707500Z"
-entries: 14
+updatedAt: "2026-08-24T13:35:32.062266500Z"
+entries: 18
 ---
 
 # memory_index
@@ -10,6 +10,10 @@ entries: 14
 - .agent/sessions/test/short-term.json — session test 短期对话流
 - .agent/sessions/s-quiet/short-term.json — session s-quiet 短期对话流
 - .agent/sessions/s-auto/short-term.json — session s-auto 短期对话流
+- .agent/sessions/eeebd3e8-8389-4b94-bf5f-d11dd4ee82ea/mid-term.json — session eeebd3e8-8389-4b94-bf5f-d11dd4ee82ea 中期摘要
+- .agent/sessions/b9da550c-2e76-4ad2-976b-bb64ca94ae02/mid-term.json — session b9da550c-2e76-4ad2-976b-bb64ca94ae02 中期摘要
+- .agent/sessions/9a53c99a-4643-4a15-bfa6-22a78b637952/mid-term.json — session 9a53c99a-4643-4a15-bfa6-22a78b637952 中期摘要
+- .agent/sessions/72a562f6-7888-418d-887f-92d9ce7fdd7d/mid-term.json — session 72a562f6-7888-418d-887f-92d9ce7fdd7d 中期摘要
 - .agent/sessions/5aea318d-6661-452e-aeda-3e10650ad519/mid-term.json — session 5aea318d-6661-452e-aeda-3e10650ad519 中期摘要
 - .agent/sessions/574d5d42-a283-4091-a6a0-c176556ee121/mid-term.json — session 574d5d42-a283-4091-a6a0-c176556ee121 中期摘要
 - .agent/sessions/3d5697a1-13c5-4eef-8561-0a749901d659/mid-term.json — session 3d5697a1-13c5-4eef-8561-0a749901d659 中期摘要
