@@ -195,7 +195,7 @@ class ChatModelLlmIntentClassifierTest {
     @DisplayName("Prompt 里 ToolCallback 一定带上 submit_intent_classification(强制结构化)")
     void toolCallbackWired() {
         // 准备一次 tool_call 响应,让 ChatModel 被调用一次
-        String args = "{\"primary\":\"OFF_TOPIC\",\"confidence\":0.5,\"model_route_hint\":\"general\"}";
+        String args = "{\"primary\":\"CHAT_QA\",\"confidence\":0.5,\"model_route_hint\":\"general\"}";
         AssistantMessage.ToolCall tc = new AssistantMessage.ToolCall(
                 "c1", "function", ChatModelLlmIntentClassifier.TOOL_NAME, args);
         AssistantMessage assistant = AssistantMessage.builder()

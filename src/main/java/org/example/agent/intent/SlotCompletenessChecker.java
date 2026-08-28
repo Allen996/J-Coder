@@ -18,9 +18,8 @@ import java.util.regex.Pattern;
  *   <li>READ_CODE: target(对象)、aspect(关注点,可空)</li>
  *   <li>WRITE_PROJECT: target_file / target_symbol、change_type、scope</li>
  *   <li>RUN_COMMAND: action(args 可选)</li>
- *   <li>CHAT_QA: 无必填</li>
+ *   <li>CHAT_QA: 无必填(继承原 OFF_TOPIC 语义:问候/拒绝/跑题都不强制槽位)</li>
  *   <li>PLANNING: goal、constraints、acceptance</li>
- *   <li>OFF_TOPIC: 无</li>
  * </ul>
  */
 @Component
@@ -34,7 +33,6 @@ public class SlotCompletenessChecker {
         REQUIRED.put(IntentLabel.RUN_COMMAND, List.of("action"));
         REQUIRED.put(IntentLabel.CHAT_QA, List.of());
         REQUIRED.put(IntentLabel.PLANNING, List.of("goal"));
-        REQUIRED.put(IntentLabel.OFF_TOPIC, List.of());
     }
 
     /** 启发式抽槽位(中文输入)。规则简单粗暴,L1 时只用作参考。 */

@@ -69,8 +69,8 @@ class IntentPrompterTest {
         IntentPrompter p = new IntentPrompter(
                 new ByteArrayInputStream("跑测试\n".getBytes(StandardCharsets.UTF_8)),
                 new PrintWriter(System.out, true, StandardCharsets.UTF_8));
-        L1IntentResult r = new L1IntentResult("e", IntentLabel.OFF_TOPIC, 0.3,
-                List.of(new L1IntentResult.Candidate(IntentLabel.OFF_TOPIC, 0.3)),
+        L1IntentResult r = new L1IntentResult("e", IntentLabel.CHAT_QA, 0.3,
+                List.of(new L1IntentResult.Candidate(IntentLabel.CHAT_QA, 0.3)),
                 Map.of(), List.of(), ModelRouteHint.GENERAL, false, null);
         assertEquals("跑测试", p.promptClarify("?", r));
     }
@@ -81,7 +81,7 @@ class IntentPrompterTest {
         IntentPrompter p = new IntentPrompter(
                 new ByteArrayInputStream("\n".getBytes(StandardCharsets.UTF_8)),
                 new PrintWriter(System.out, true, StandardCharsets.UTF_8));
-        L1IntentResult r = new L1IntentResult("e", IntentLabel.OFF_TOPIC, 0.3,
+        L1IntentResult r = new L1IntentResult("e", IntentLabel.CHAT_QA, 0.3,
                 List.of(), Map.of(), List.of(), ModelRouteHint.GENERAL, false, null);
         assertEquals("?", p.promptClarify("?", r));
     }

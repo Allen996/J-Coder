@@ -20,10 +20,55 @@ public final class IntentContext {
     private final List<ToolHistoryEntry> toolHistory = new ArrayList<>();
     private volatile String resolvedModel;
     private volatile boolean sticky = true;
+    // 第三阶段:StrongPatternClassifier 触发时记录,供 eval / 日志观测
+    private volatile List<String> strongPatternTypes = List.of();
+    private volatile String clarifyText = null;
+    // 第三阶段:IntentGate 决策后的 tier(可能与 l1.confidence 算出的 tier 不同 —
+    // 强 pattern 触发时强制 CLARIFY 但 conf 不变)
+    private volatile L1IntentResult.Tier decidedTier;
 
     public IntentContext(L1IntentResult l1, String resolvedModel) {
         this.l1 = l1;
         this.resolvedModel = resolvedModel;
+        this.decidedTier = null; // null 表示"按 l1.confidence 算"
+    }
+
+    /**
+     * 第三阶段:IntentGate 在三档决策后,把最终 tier 存进来。
+     * 读取时 {@link #tier()} 会优先返回这里存的值;如果未存(null),回落到
+     * {@link L1IntentResult#tier()} 的旧行为。
+     */
+    public void setDecidedTier(L1IntentResult.Tier tier) {
+        this.decidedTier = tier;
+    }
+
+    /** IntentGate 决策后的 tier;若未设置则按 l1.confidence 算。 */
+    public L1IntentResult.Tier tier() {
+        return decidedTier != null ? decidedTier : l1.tier();
+    }
+
+    /**
+     * 第三阶段:把"被反问的强 pattern 类型"和"反问文本"挂到 ctx 上,
+     * 供 per-row eval jsonl 与 LogSink 消费。{@code types} 为 null / 空表示未触发反问。
+     */
+    public void attachStrongPattern(List<String> types, String clarifyText) {
+        this.strongPatternTypes = types == null ? List.of() : List.copyOf(types);
+        this.clarifyText = clarifyText;
+    }
+
+    /** 命中的强 pattern 类型(可空集合表示未触发)。 */
+    public List<String> strongPatternTypes() {
+        return strongPatternTypes;
+    }
+
+    /** 反问文本(可能为 null —— 未触发或 suppress 下不返回)。 */
+    public String clarifyText() {
+        return clarifyText;
+    }
+
+    /** 便捷判断:本次 L1 是否触发了强 pattern 反问。 */
+    public boolean isClarifiedByStrongPattern() {
+        return clarifyText != null && !clarifyText.isBlank();
     }
 
     public L1IntentResult l1() {
@@ -31,7 +76,7 @@ public final class IntentContext {
     }
 
     public IntentLabel primaryLabel() {
-        return l1 == null ? IntentLabel.OFF_TOPIC : l1.primary();
+        return l1 == null ? IntentLabel.CHAT_QA : l1.primary();
     }
 
     public ModelRouteHint routeHint() {

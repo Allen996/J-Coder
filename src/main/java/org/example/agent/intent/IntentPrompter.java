@@ -113,4 +113,72 @@ public class IntentPrompter {
         if (s == null) return "";
         return s.length() <= max ? s : s.substring(0, max) + "…";
     }
+
+    /**
+     * 第三阶段新增:为"强 pattern 触发"生成模板化中文反问文本。
+     *
+     * <p>不走 LLM,固定模板(Q4-A):
+     * <pre>
+     * 我看到你说的是 '&lt;原句&gt;'，但你似乎想 &lt;LLM primary 中文动作&gt;，是这样吗？
+     * </pre>
+     *
+     * <p>命中多个 pattern 类型时,在句末追加一句说明:
+     * <pre>
+     * 另:我也注意到你说了 &lt;其他类型中文动作&gt;。
+     * </pre>
+     *
+     * <p>{@code suppress=true}(eval / 测试场景)也返回反问文本,不递归 classifyFresh,
+     * 让 eval 能观测反问是否被触发(决策 A)。
+     *
+     * @param userInput   用户原句
+     * @param llmPrimary  LLM 给出的 primary(必须是写读类,否则不调用本方法)
+     * @param types       StrongPatternClassifier 命中的强 pattern 类型列表(可为 null / 空)
+     * @return 中文反问文本;types 为空时返回 null
+     */
+    public String promptStrongPatternClarify(String userInput, IntentLabel llmPrimary,
+                                              List<StrongPatternClassifier.PatternType> types) {
+        if (types == null || types.isEmpty() || llmPrimary == null) {
+            return null;
+        }
+        String action = chineseAction(llmPrimary);
+        if (action == null) {
+            return null; // 非写读类,本路径不适用
+        }
+        String firstType = types.get(0).chineseHint();
+        StringBuilder sb = new StringBuilder();
+        sb.append("我看到你说的是 '").append(truncate(userInput, 60))
+          .append("'，但你似乎想 ").append(action)
+          .append("，是这样吗？");
+        if (types.size() > 1) {
+            sb.append(" 另:我也注意到你似乎想 ");
+            for (int i = 1; i < types.size(); i++) {
+                if (i > 1) sb.append(" / ");
+                sb.append(types.get(i).chineseHint());
+            }
+            sb.append("。");
+        }
+        // suppress 下不打印 UI,但仍返回文本供 eval / 日志观测
+        if (!suppress) {
+            out.println();
+            out.println("  ┌─ clarify by strong pattern ───────────────────────────");
+            out.printf("  │ input    : %s%n", truncate(userInput, 80));
+            out.printf("  │ patterns : %s%n", types);
+            out.printf("  │ guessed  : %s%n", llmPrimary.name());
+            out.printf("  │ ask      : %s%n", sb);
+            out.flush();
+        }
+        return sb.toString();
+    }
+
+    private static String chineseAction(IntentLabel label) {
+        if (label == null) return null;
+        return switch (label) {
+            case READ_CODE -> "读代码";
+            case WRITE_PROJECT -> "改代码";
+            case RUN_COMMAND -> "执行命令";
+            case PLANNING -> "做规划";
+            // CHAT_QA 不走反问路径 —— 已经是非编程意图,直接走模板响应即可
+            default -> null;
+        };
+    }
 }

@@ -90,7 +90,7 @@ public class ChatModelLlmIntentClassifier implements LlmIntentClassifier {
                   "items": {
                     "type": "object",
                     "properties": {
-                      "label": {"type": "string", "enum": ["READ_CODE", "WRITE_PROJECT", "RUN_COMMAND", "CHAT_QA", "PLANNING", "OFF_TOPIC"]},
+                      "label": {"type": "string", "enum": ["READ_CODE", "WRITE_PROJECT", "RUN_COMMAND", "CHAT_QA", "PLANNING"]},
                       "score": {"type": "number", "minimum": 0, "maximum": 1}
                     },
                     "required": ["label", "score"]
@@ -222,10 +222,43 @@ public class ChatModelLlmIntentClassifier implements LlmIntentClassifier {
     }
 
     private Prompt buildPrompt(String userInput) {
-        String sys = "你是 J-Coder 的意图分类器。\n" +
-                "对用户输入做意图分类,然后通过调用 submit_intent_classification 工具提交结果。\n" +
-                "不要在 assistant 文本中输出任何自然语言 —— 所有内容都应通过工具的 arguments 提交。\n" +
-                "工具调用一次即结束。";
+        String sys = """
+                你是 J-Coder 的意图分类器。你的唯一职责是分析用户输入，并通过调用 `submit_intent_classification` 工具提交分类结果。
+
+                ## 核心原则
+                1. **必须调用工具**：你必须在每次响应时调用一次 `submit_intent_classification` 工具。
+                2. **禁止输出文本**：除了工具调用外，不得在 assistant 消息中输出任何自然语言、解释或标点。
+                3. **取最高优先级**：如果用户输入同时匹配多条规则，只选择优先级最高（编号最小）的那一条。
+
+                ## 判别规则（优先级从高到低）
+                1. **READ_CODE（读代码）**：用户指向项目内具体代码实体（类名、方法名、文件路径、.java 等扩展名），或使用“这段代码”、“这文件”、“我们项目里 X”等指代，或提出“为什么 X 这么写 / 报错 / 是怎么运作的”等涉及**代码内部行为**的问题。
+                2. **READ_CODE（shell 只读查询）**：用户明确要求执行只读 shell 命令，包括 `grep`、`cat`、`head`、`tail`、`ls`、`find`、`list_dir`、`git status/log/diff/show`、`java -version`、`mvn --version` 等。
+                3. **CHAT_QA（概念问答）**：用户询问“什么是 X”、“X 区别”、“explain what X means”、“介绍下 X 是什么”等**通用编程概念或语言机制**，且不涉及项目内具体代码。
+                4. **WRITE_PROJECT（写代码）**：用户使用“改”、“新增”、“重构”、“写一个”、“加一个”、“fix”、“implement”、“add”等**明确的代码变更动词**。
+                5. **RUN_COMMAND（运行命令）**：用户要求执行非只读操作，如“跑一下”、“git push”、“mvn install”、“npm install”、“build”等。
+                6. **CHAT_QA（兜底）**：无代码上下文且非上述类型的通用问题，默认归为此类。
+
+                ## 边界消歧（关键）
+                当以下情况出现时，请严格按此处理：
+                - “explain how X works”：如果 X 是项目内类名/方法名 → **READ_CODE**；如果 X 是通用术语（如 volatile、async/await）→ **CHAT_QA**。
+                - 包含“报错”、“重试”、“匹配不到”等调试词汇：优先视为 **READ_CODE**（问题排查属于代码行为）。
+                - 包含“介绍下”、“讲讲” + 项目内特有名词 → **READ_CODE**（因为项目内实体是具体代码）。
+
+                ## 示例
+                | 用户输入 | 正确分类 |
+                |----------|----------|
+                | "explain how IntentGate picks the model route" | READ_CODE |
+                | "explain what async/await means in JS" | CHAT_QA |
+                | "为什么 grep 这次匹配不到" | READ_CODE |
+                | "为什么 Java 的 volatile 不够" | CHAT_QA |
+                | "它为啥要在这里重试？" | READ_CODE |
+                | "git status 看一下" | READ_CODE |
+                | "实现一下幂等" | WRITE_PROJECT |
+                | "讲讲我们项目里这个缓存是咋实现的" | READ_CODE |
+                | "你好" | CHAT_QA |
+
+                工具调用一次即结束。
+                """;
         List<Message> msgs = List.of(
                 new SystemMessage(sys),
                 new UserMessage(truncate(userInput, 1000))

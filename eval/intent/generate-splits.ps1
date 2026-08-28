@@ -16,7 +16,7 @@ foreach ($line in ($jsonl -split "`n")) {
 
 # Goal: 60 test, 40 dev, 200 train. Balanced by gold_label.
 $byLabel = $rows | Group-Object gold_label
-$labelOrder = @("READ_CODE", "WRITE_PROJECT", "RUN_COMMAND", "CHAT_QA", "PLANNING", "OFF_TOPIC")
+$labelOrder = @("READ_CODE", "WRITE_PROJECT", "RUN_COMMAND", "CHAT_QA", "PLANNING")
 
 # Per-label target test ratio (~0.2). Round to nearest bucket-friendly number.
 $testBudget = 60

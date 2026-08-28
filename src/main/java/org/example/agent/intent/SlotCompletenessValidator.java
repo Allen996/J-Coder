@@ -26,7 +26,7 @@ import java.util.regex.Pattern;
  *   <li>{@link IntentLabel#RUN_COMMAND}: {@code action} 必须在已知动作枚举内。</li>
  *   <li>{@link IntentLabel#READ_CODE}: {@code target} 任意非空字符串(最弱校验)。</li>
  *   <li>{@link IntentLabel#PLANNING}: {@code goal} 任意非空字符串(最弱校验)。</li>
- *   <li>{@link IntentLabel#CHAT_QA} / {@link IntentLabel#OFF_TOPIC}: 无必填,永远通过。</li>
+ *   <li>{@link IntentLabel#CHAT_QA}: 无必填,永远通过(继承原 OFF_TOPIC 语义)。</li>
  * </ul>
  *
  * <p><b>missing vs invalid 区分</b>:

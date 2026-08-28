@@ -1,0 +1,90 @@
+﻿=== Total samples === 60
+
+=== Overall confusion (gold -> pred) ===
+  OFF_TOPIC->OFF_TOPIC                     10
+  WRITE_PROJECT->WRITE_PROJECT             9
+  PLANNING->PLANNING                       9
+  RUN_COMMAND->RUN_COMMAND                 8
+  READ_CODE->READ_CODE                     7
+  CHAT_QA->CHAT_QA                         6
+  CHAT_QA->READ_CODE                       4
+  READ_CODE->OFF_TOPIC                     2
+  READ_CODE->CHAT_QA                       1
+  CHAT_QA->OFF_TOPIC                       1
+  WRITE_PROJECT->READ_CODE                 1
+  RUN_COMMAND->WRITE_PROJECT               1
+  OFF_TOPIC->RUN_COMMAND                   1
+
+=== READ_CODE gold samples === 10
+id       gold pred conf tier fb kw_sug kw_hits slot_val
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+L1-001   READ_CODE    READ_CODE    0.8333  OFFER    false READ_CODE    看|看看|怎么实现|实现|实现|test                     PASS
+  INPUT: 帮我看看 NoteStore 是怎么实现的
+L1-002   READ_CODE    READ_CODE    0.8875  DIRECT   false READ_CODE    解释|逻辑                                    PASS
+  INPUT: 解释一下 Foo.java 里 handleMessage 这个方法的逻辑
+L1-003   READ_CODE    OFF_TOPIC    0.5     CLARIFY  true null                                                  PASS
+  INPUT: 这段代码是做什么的?讲一下
+L1-004   READ_CODE    OFF_TOPIC    0.5     CLARIFY  true null                                                  PASS
+  INPUT: src/main/java/util/Cache.java 里那个 LRU 怎么淘汰的?
+L1-005   READ_CODE    READ_CODE    0.7499  OFFER    false READ_CODE    看|看一下|整体|build                           PASS
+  INPUT: 看一下 ContextBuilder 这个类的整体结构
+L1-006   READ_CODE    READ_CODE    0.6666  OFFER    false READ_CODE    实现|实现|build                              PASS
+  INPUT: 告诉我 ReActLoop 里 buildInitialMessages 的实现
+L1-007   READ_CODE    READ_CODE    0.7499  OFFER    false READ_CODE    explain|explain                          PASS
+  INPUT: explain how grep works in this codebase
+L1-008   READ_CODE    READ_CODE    0.8562  DIRECT   false READ_CODE    看|看下|实现|实现                               PASS
+  INPUT: 看下 AuthService#login 的实现细节
+L1-009   READ_CODE    CHAT_QA      0.7499  OFFER    false CHAT_QA      为什么|写                                    PASS
+  INPUT: 这段为什么这么写?
+L1-010   READ_CODE    READ_CODE    0.8875  DIRECT   false READ_CODE    trace                                    PASS
+  INPUT: trace一下 RequestHandler 是怎么处理超时的
+
+READ_CODE accuracy: 7/10 = 70.0%
+
+=== READ_CODE mis-classified ===
+
+[L1-003] input: 这段代码是做什么的?讲一下
+  pred: OFF_TOPIC (conf=0.5) tier=CLARIFY fallback=true
+  reason: no keyword hit
+  keyword_suggested: null, keyword_score: 0.5
+  keyword_hits: []
+  slot_score: 1, slot_outcome: PASS
+  raw_llm_conf: 0.5, calibration: ["FLOOR_NO_PRIMARY"]
+
+[L1-004] input: src/main/java/util/Cache.java 里那个 LRU 怎么淘汰的?
+  pred: OFF_TOPIC (conf=0.5) tier=CLARIFY fallback=true
+  reason: no keyword hit
+  keyword_suggested: null, keyword_score: 0.5
+  keyword_hits: []
+  slot_score: 1, slot_outcome: PASS
+  raw_llm_conf: 0.5, calibration: ["FLOOR_NO_PRIMARY"]
+
+[L1-009] input: 这段为什么这么写?
+  pred: CHAT_QA (conf=0.7499999999999999) tier=OFFER fallback=false
+  reason: -
+  keyword_suggested: CHAT_QA, keyword_score: 0.75
+  keyword_hits: ["为什么","写"]
+  slot_score: 1, slot_outcome: PASS
+  raw_llm_conf: 0.75, calibration: []
+
+=== Patterns ===
+mis-classified: 3
+  -> CHAT_QA: 1
+  -> OFF_TOPIC: 2
+  -> WRITE_PROJECT: 0
+  -> other: 0
+
+=== Keyword hits in mis-classified READ_CODE ===
+  [L1-003] (pred=OFF_TOPIC) hits=[] sugg=null score=0.5
+  [L1-004] (pred=OFF_TOPIC) hits=[] sugg=null score=0.5
+  [L1-009] (pred=CHAT_QA) hits=["为什么","写"] sugg=CHAT_QA score=0.75
+
+=== CHAT_QA gold -> READ_CODE pred (false positives) ===
+  [L1-041] input: explain what async/await means in JS
+    hits=["explain","explain"] sugg=READ_CODE
+  [L1-044] input: what does Spring AI do exactly
+    hits=["what does"] sugg=READ_CODE
+  [L1-153] input: why is Java's volatile not enough for atomic ops
+    hits=["why","why"] sugg=READ_CODE
+  [L1-154] input: 介绍下 Spring 的 IoC
+    hits=["介绍","介绍下"] sugg=READ_CODE

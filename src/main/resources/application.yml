@@ -105,4 +105,4 @@ cli:
       general: ${INTENT_MODEL_GENERAL:qwen3.8-max}
     fallback:
       enabled: true
-      default-label: OFF_TOPIC
+      default-label: CHAT_QA

@@ -7,7 +7,7 @@
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `id` | string | ✅ | `L2-` + 三位序号。 |
-| `l1_label` | enum | ✅ | 上下文里的 L1 意图(`READ_CODE`/`WRITE_PROJECT`/`RUN_COMMAND`/`CHAT_QA`/`PLANNING`/`OFF_TOPIC`)。 |
+| `l1_label` | enum | ✅ | 上下文里的 L1 意图(`READ_CODE`/`WRITE_PROJECT`/`RUN_COMMAND`/`CHAT_QA`/`PLANNING`)。第三阶段删除 `OFF_TOPIC`。 |
 | `step` | int | ✅ | 当前 step(用于"写意图 step ≥ 3 持续纯读"规则)。 |
 | `tool` | string | ✅ | 模型想要调的工具名,如 `read_file` / `edit_file` / `run_shell`。 |
 | `args_excerpt` | string | ✅ | args 的摘要(不存完整 JSON,只取关键路径/参数)。 |
@@ -27,8 +27,8 @@
 | 写意图 step ≥ 3 持续调用纯只读工具(读漂移) | `WARN` |
 | 写意图 step < 3 调只读工具 | `ALLOW` |
 | 意图是 `RUN_COMMAND`,模型却调 `write_file` | `BLOCK`(语义冲突) |
-| 意图是 `CHAT_QA` / `OFF_TOPIC` 下调用任何工具 | `BLOCK` |
-| 意图是 `OFF_TOPIC`,用户只是问了"看一下 Foo.java" | `ALLOW` —— 这个 case 应当回到 L1 处理,不在 L2 决策范围 |
+| 意图是 `CHAT_QA` 下调用任何工具 | `BLOCK`(第三阶段合并 OFF_TOPIC 语义) |
+| (第三阶段删除)`OFF_TOPIC` 样本已并入 `CHAT_QA`,L2 决策由 `l1_label=CHAT_QA` 承担 | — |
 
 ## 指标
 

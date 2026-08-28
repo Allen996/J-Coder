@@ -27,9 +27,8 @@ class IntentAwareToolSetTest {
     }
 
     @Test
-    @DisplayName("CHAT_QA / OFF_TOPIC 推荐集合为空")
+    @DisplayName("CHAT_QA 推荐集合为空(继承原 OFF_TOPIC 语义)")
     void chatOffEmpty() {
         assertTrue(set.recommendedFor(IntentLabel.CHAT_QA).isEmpty());
-        assertTrue(set.recommendedFor(IntentLabel.OFF_TOPIC).isEmpty());
     }
 }

@@ -61,9 +61,9 @@ class LlmToolGateTest {
     }
 
     @Test
-    @DisplayName("OFF_TOPIC 下任何工具调用 → BLOCK")
+    @DisplayName("CHAT_QA(继承 OFF_TOPIC 语义)下任何工具调用 → BLOCK")
     void offTopicBlocksAllTools() {
-        IntentContext ctx = newContext(IntentLabel.OFF_TOPIC);
+        IntentContext ctx = newContext(IntentLabel.CHAT_QA);
         L2ToolGateResult r = gate.evaluate(ctx, "read_file", "{}", 1);
         assertEquals(ToolGateDecision.BLOCK, r.decision());
     }

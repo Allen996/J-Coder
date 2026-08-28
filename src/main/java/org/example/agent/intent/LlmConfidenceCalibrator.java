@@ -12,11 +12,11 @@ import java.util.Map;
  * <ul>
  *   <li><b>过度自信</b>:即使判断是"无证据兜底" (例 "你好" → CHAT_QA 0.87),LLM 也倾向于
  *       给一个看起来合理的分数,而不是说不确定。</li>
- *   <li><b>均匀偏高</b>:OFF_TOPIC 这种"边界模糊"类别上,LLM conf 几乎全部挤在 0.85-0.90。</li>
+ *   <li><b>均匀偏高</b>:CHAT_QA 这种"边界模糊"类别上,LLM conf 几乎全部挤在 0.85-0.90。</li>
  *   <li><b>负向词压不住</b>: "do not run anything yet" 时 LLM 给 CHAT_QA 0.87,
  *       关键词层 negative_signals 已经检出,但 conf 没体现。</li>
  *   <li><b>类别边界模糊但强行给高分</b>: "提交一下" 这种纯动词词组,
- *       LLM 倾向判 OFF_TOPIC 0.76 但其实是 RUN_COMMAND。</li>
+ *       LLM 倾向判 CHAT_QA 0.76 但其实是 RUN_COMMAND。</li>
  * </ul>
  *
  * <p><b>设计原则</b>:不是替换 LLM,而是"事实核查员"——
@@ -63,7 +63,7 @@ public final class LlmConfidenceCalibrator {
 
     /** 触发 NO_EVIDENCE_CAP 的"通用兜底类":无关键词证据时上限封顶。 */
     private static final java.util.Set<IntentLabel> NO_EVIDENCE_TARGETS =
-            java.util.Set.of(IntentLabel.OFF_TOPIC, IntentLabel.CHAT_QA);
+            java.util.Set.of(IntentLabel.CHAT_QA);
 
     private final Calibration cfg;
 

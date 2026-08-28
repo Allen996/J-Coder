@@ -91,8 +91,8 @@ public class LlmToolGate {
         }
 
         // 5) 非推荐集合但不属于强冲突:放进候选集,标 WARN
-        if (l1.primaryLabel() == IntentLabel.OFF_TOPIC || l1.primaryLabel() == IntentLabel.CHAT_QA) {
-            // 离主题/纯问答场景下不应调用任何工具,降级为 BLOCK
+        if (l1.primaryLabel() == IntentLabel.CHAT_QA) {
+            // 纯问答/问候/跑题场景下不应调用任何工具,降级为 BLOCK
             return L2ToolGateResult.block(0.7, "tool not allowed under " + l1.primaryLabel());
         }
         return L2ToolGateResult.warn(0.65,

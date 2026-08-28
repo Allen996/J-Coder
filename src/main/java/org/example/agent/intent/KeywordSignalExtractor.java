@@ -32,8 +32,9 @@ public class KeywordSignalExtractor implements IntentSignalExtractor {
         KEYWORDS.put(IntentLabel.READ_CODE, List.of(
                 "看", "看看", "看下", "看一下", "解释", "说明", "讲解", "介绍",
                 "理解", "怎么实现", "怎么写", "怎么做的", "原理", "逻辑", "代码里",
-                "实现", "阅读", "trace", "explain", "what does", "how does", "why"
-        ));
+                "实现", "阅读", "trace", "explain", "what does", "how does", "why",
+                // ↓ 新增:pronoun 系列(覆盖 "它为啥..."、"这段代码"、"那个分支")
+                "这段", "那段", "这文件", "这代码", "那代码", "它", "这里"));
         KEYWORDS.put(IntentLabel.WRITE_PROJECT, List.of(
                 "改", "修改", "改一下", "写", "新增", "加上", "添加", "重构",
                 "替换", "改成", "改为", "优化", "实现", "新增一个", "帮我加",
@@ -41,9 +42,11 @@ public class KeywordSignalExtractor implements IntentSignalExtractor {
         ));
         KEYWORDS.put(IntentLabel.RUN_COMMAND, List.of(
                 "跑", "跑一下", "运行", "执行", "构建", "编译", "打包",
-                "测试", "单测", "提交", "推送", "拉取", "merge", "rebase",
-                "build", "test", "run", "mvn", "gradle", "npm", "git push",
+                "提交", "推送", "拉取", "merge", "rebase",
+                "build", "run", "mvn", "gradle", "npm", "git push",
                 "git pull", "git commit"
+        // ↓ 删 "测试"、"单测"、"test"
+        // "test" 是 substring 匹配,会撞到 "NoteStore" 里的 "test" / "src/test" 路径
         ));
         KEYWORDS.put(IntentLabel.CHAT_QA, List.of(
                 "什么是", "为什么", "介绍下", "讲讲", "原理是", "区别", "对比",

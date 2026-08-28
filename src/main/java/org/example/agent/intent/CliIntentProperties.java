@@ -23,7 +23,7 @@ public record CliIntentProperties(
                 List.of(), null, null);
         if (l2 == null) l2 = new L2(true, 2000L, new L2Thresholds(0.80, 0.55, 0.15, 0.55));
         if (modelRouting == null) modelRouting = new ModelRouting("qwen3.7-flash", "qwen3.7-plus", "qwen3.7-plus");
-        if (fallback == null) fallback = new Fallback(true, IntentLabel.OFF_TOPIC);
+        if (fallback == null) fallback = new Fallback(true, IntentLabel.CHAT_QA);
     }
 
     public CliIntentProperties() {
@@ -116,7 +116,8 @@ public record CliIntentProperties(
 
     public record Fallback(boolean enabled, IntentLabel defaultLabel) {
         public Fallback {
-            if (defaultLabel == null) defaultLabel = IntentLabel.OFF_TOPIC;
+            // 第三阶段:历史 defaultLabel=OFF_TOPIC;OFF_TOPIC 类别删除后,兜底改为 CHAT_QA
+            if (defaultLabel == null) defaultLabel = IntentLabel.CHAT_QA;
         }
     }
 }

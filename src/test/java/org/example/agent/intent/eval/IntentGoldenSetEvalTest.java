@@ -18,6 +18,7 @@ import org.example.agent.intent.LocalIntentScorer;
 import org.example.agent.intent.ModelRouteHint;
 import org.example.agent.intent.SlotCompletenessChecker;
 import org.example.agent.intent.SlotCompletenessValidator;
+import org.example.agent.intent.StrongPatternClassifier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
@@ -155,6 +156,7 @@ class IntentGoldenSetEvalTest {
                 llm, signals, slots, slotValidator, calibrator, scorer, prompter,
                 new org.example.agent.intent.IntentFallbackPolicy(props),
                 props,
+                new StrongPatternClassifier(),
                 props.modelRouting().light(),
                 props.modelRouting().code(),
                 props.modelRouting().general(),
@@ -189,11 +191,16 @@ class IntentGoldenSetEvalTest {
                 r.id = id;
                 r.input = input;
                 r.gold_label = gold;
-                r.is_offtopic_subset = "OFF_TOPIC".equals(gold);
+                r.is_offtopic_subset = false; // 第三阶段:OFF_TOPIC 已删除,所有非编程类样本归 CHAT_QA
+                // 第三阶段:StrongPatternClassifier 反问路径观测
+                r.strong_pattern_triggered = ctx != null && ctx.isClarifiedByStrongPattern();
+                r.strong_pattern_types = ctx == null ? List.of()
+                        : (ctx.strongPatternTypes() == null ? List.of() : ctx.strongPatternTypes());
+                r.clarify_text = ctx == null ? null : ctx.clarifyText();
                 if (ctx != null && ctx.l1() != null) {
                     r.pred_label = ctx.l1().primary() == null ? "PENDING" : ctx.l1().primary().name();
                     r.pred_conf = ctx.l1().confidence();
-                    r.tier = ctx.l1().tier(props.l1().thresholds()).name();
+                    r.tier = ctx.tier().name();
                     r.fallback = ctx.l1().fallback();
                     r.fallback_reason = ctx.l1().fallbackReason();
                     r.llmConf = ctx.l1().confidence();
@@ -291,20 +298,24 @@ class IntentGoldenSetEvalTest {
         int tDirect = 0, tOffer = 0, tClarify = 0, tError = 0;
         Map<String, int[]> perClass = new TreeMap<>(); // [tp, fp, fn]
         for (String l : Arrays.asList("READ_CODE", "WRITE_PROJECT", "RUN_COMMAND",
-                "CHAT_QA", "PLANNING", "OFF_TOPIC")) {
+                "CHAT_QA", "PLANNING")) {
             perClass.put(l, new int[]{0, 0, 0});
         }
         Map<String, Map<String, Integer>> confusion = new TreeMap<>();
         for (String l : perClass.keySet()) confusion.put(l, new TreeMap<>());
 
-        // 方案 B:OFF_TOPIC 子集聚合 + 校准规则触发统计
-        int otTotal = 0, otCorrect = 0;
+        // 校准规则触发统计(第三阶段:OFF_TOPIC 子集统计已删除——OFF_TOPIC 类别不存在)
         Map<String, Integer> rulesTriggered = new TreeMap<>(); // 4 个规则 + "NONE"
         int slotPinnedTotal = 0;
         // 方案 B 第二阶段修复:fallback 且 conf=0 → 视为"未决策",
-        // 不计入 top-1 分子、不计入 OFF_TOPIC subset、不计入 per-class fn;
+        // 不计入 top-1 分子、不计入 per-class fn;
         // 仅计入 fallback_rate 分子(失败率统计)。
         int noDecisionCount = 0;
+        // 第三阶段:StrongPatternClassifier 反问路径聚合
+        int strongPatternTriggeredTotal = 0;
+        Map<String, Integer> strongPatternByType = new TreeMap<>(); // GREETING/INJECTION/NEGATION → 命中数
+        Map<String, Integer> strongPatternByGold = new TreeMap<>(); // gold_label → 触发数
+        int strongPatternCorrected = 0; // 触发反问且 pred == gold 的样本数
 
         for (RowReport r : rows) {
             total++;
@@ -312,8 +323,6 @@ class IntentGoldenSetEvalTest {
             String pred = r.pred_label;
             if (pred == null || "PENDING".equals(pred) || "ERROR".equals(pred)) {
                 tError++;
-                // OFF_TOPIC 子集如果 row 是 ERROR,后面单独算
-                if (r.is_offtopic_subset) otTotal++;
                 continue;
             }
             if (r.fallback) fallback++;
@@ -347,13 +356,7 @@ class IntentGoldenSetEvalTest {
             Map<String, Integer> confRow = confusion.get(gold);
             confRow.merge(pred, 1, Integer::sum);
 
-            // 方案 B:OFF_TOPIC 子集统计(仅算"真决策"过的)
-            if (r.is_offtopic_subset) {
-                otTotal++;
-                if (pred.equals(gold)) otCorrect++;
-            }
-
-            // 方案 B:校准规则触发统计
+            // 校准规则触发统计
             if (r.calibration_rules == null || r.calibration_rules.isEmpty()) {
                 rulesTriggered.merge("NONE", 1, Integer::sum);
             } else {
@@ -364,6 +367,18 @@ class IntentGoldenSetEvalTest {
 
             // 方案 B:slot 准入门槛触发统计
             if (r.tier_pinned_by_slot) slotPinnedTotal++;
+
+            // 第三阶段:强 pattern 反问路径统计
+            if (r.strong_pattern_triggered) {
+                strongPatternTriggeredTotal++;
+                if (r.strong_pattern_types != null) {
+                    for (String t : r.strong_pattern_types) {
+                        strongPatternByType.merge(t, 1, Integer::sum);
+                    }
+                }
+                strongPatternByGold.merge(gold, 1, Integer::sum);
+                if (pred.equals(gold)) strongPatternCorrected++;
+            }
         }
         // 方案 B:top-1 = 真决策中正确的比例(noDecision 已从分母中排除)
         double top1 = total == 0 ? 0.0 : (double) correct / (total - noDecisionCount);
@@ -412,19 +427,40 @@ class IntentGoldenSetEvalTest {
         noDecisionStats.put("excluded_from_top1_denominator", true);
         out.put("no_decision_stats", noDecisionStats);
 
-        // 方案 B:OFF_TOPIC 子集 + 校准规则 + slot 准入门槛 子指标
-        Map<String, Object> offTopicStats = new LinkedHashMap<>();
-        offTopicStats.put("support", otTotal);
-        offTopicStats.put("recall", otTotal == 0 ? 0.0 : round((double) otCorrect / otTotal));
-        offTopicStats.put("top1", offTopicStats.get("recall")); // 单类就等价
-        out.put("off_topic_subset", offTopicStats);
-
+        // 第三阶段:OFF_TOPIC 子集已删除;校准规则 + slot 准入门槛 子指标
         out.put("calibration_rules_triggered", rulesTriggered);
 
         Map<String, Object> slotGate = new LinkedHashMap<>();
         slotGate.put("total_triggered", slotPinnedTotal);
         slotGate.put("total_write_run", countWriteRun(rows));
         out.put("slot_gate", slotGate);
+
+        // 第三阶段:StrongPatternClassifier 反问路径聚合报告
+        // 注:fake LLM 下 total_triggered 通常为 0 —— 因为 fake LLM 对反问类输入
+        // (GREETING/INJECTION/NEGATION) fallback 到 null primary,而反问触发条件
+        // 要求 llmOut.primary() ∈ {READ_CODE, WRITE_PROJECT, RUN_COMMAND, PLANNING}。
+        // 真实 LLM 跑时这些字段才会有非零值(典型 CHAT_QA 样本被真实 LLM 判 CHAT_QA
+        // primary 不触发,但边缘 case 如 "你好帮我看下 AuthService" 真实 LLM 判 READ_CODE
+        // 会触发反问)。
+        Map<String, Object> strongPatternStats = new LinkedHashMap<>();
+        strongPatternStats.put("total_triggered", strongPatternTriggeredTotal);
+        strongPatternStats.put("total_rows", rows.size());
+        strongPatternStats.put("trigger_rate", rows.isEmpty() ? 0.0
+                : round((double) strongPatternTriggeredTotal / rows.size()));
+        strongPatternStats.put("by_type", strongPatternByType);
+        strongPatternStats.put("by_gold_label", strongPatternByGold);
+        strongPatternStats.put("correct_after_clarify", strongPatternCorrected);
+        // 反问触发后 pred 是否仍是写读类(决策 B 保留 primary)
+        int stillWriteRead = 0;
+        for (RowReport r : rows) {
+            if (r.strong_pattern_triggered
+                    && ("READ_CODE".equals(r.pred_label) || "WRITE_PROJECT".equals(r.pred_label)
+                            || "RUN_COMMAND".equals(r.pred_label) || "PLANNING".equals(r.pred_label))) {
+                stillWriteRead++;
+            }
+        }
+        strongPatternStats.put("still_write_read_primary", stillWriteRead);
+        out.put("strong_pattern_stats", strongPatternStats);
 
         return out;
     }
@@ -470,8 +506,15 @@ class IntentGoldenSetEvalTest {
         public String slot_validation_outcome;
         /** 是否被 slot 准入门槛强制降到非 DIRECT。 */
         public boolean tier_pinned_by_slot;
-        /** gold_label == OFF_TOPIC(便于离线分桶分析)。 */
+        /** 第三阶段:OFF_TOPIC 已删除,字段保留但恒为 false。 */
         public boolean is_offtopic_subset;
+        // 第三阶段:StrongPatternClassifier 反问路径可观测字段
+        /** 本条样本是否触发了强 pattern 反问(GREETING/INJECTION/NEGATION 任一命中且 LLM primary ∈ 写读类)。 */
+        public boolean strong_pattern_triggered;
+        /** 命中的强 pattern 类型列表(GREETING / INJECTION / NEGATION),可能为空。 */
+        public List<String> strong_pattern_types;
+        /** 反问文本(模板化中文);null 表示未触发反问。 */
+        public String clarify_text;
     }
 
     /**
@@ -523,7 +566,6 @@ class IntentGoldenSetEvalTest {
                 case RUN_COMMAND -> IntentLabel.WRITE_PROJECT;
                 case CHAT_QA -> IntentLabel.READ_CODE;
                 case PLANNING -> IntentLabel.WRITE_PROJECT;
-                case OFF_TOPIC -> IntentLabel.CHAT_QA;
             };
         }
     }

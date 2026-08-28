@@ -1,0 +1,220 @@
+﻿Total rows: 200
+
+READ_CODE total: 33
+READ_CODE correct: 16
+READ_CODE → pred: { READ_CODE: 16, CHAT_QA: 11, RUN_COMMAND: 6 }
+
+=== READ_CODE → CHAT_QA (11) ===
+
+[L1-020] explain how IntentGate picks the model route
+  pred=CHAT_QA conf=0.637 tier=OFFER fallback=false
+  reason=-
+  kw_sug=READ_CODE kw_score=0.75
+  kw_hits=["explain","explain"]
+  neg=[]
+  slot=1 slotVR=PASS
+  raw=0.95 rules=["HIGH_CLIP","CONFLICT_PENALTY"]
+
+[L1-022] 它为啥要在这里重试?
+  pred=CHAT_QA conf=0.575 tier=CLARIFY fallback=false
+  reason=-
+  kw_sug=null kw_score=0.5
+  kw_hits=[]
+  neg=[]
+  slot=1 slotVR=PASS
+  raw=0.95 rules=["HIGH_CLIP","NO_EVIDENCE_CAP"]
+
+[L1-025] 说一下 prompt 怎么传给 ChatModel 的
+  pred=CHAT_QA conf=0.575 tier=CLARIFY fallback=false
+  reason=-
+  kw_sug=null kw_score=0.5
+  kw_hits=[]
+  neg=[]
+  slot=1 slotVR=PASS
+  raw=0.95 rules=["HIGH_CLIP","NO_EVIDENCE_CAP"]
+
+[L1-026] 看下里面那个分支
+  pred=CHAT_QA conf=0.700 tier=OFFER fallback=false
+  reason=-
+  kw_sug=READ_CODE kw_score=1
+  kw_hits=["看","看下"]
+  neg=[]
+  slot=1 slotVR=PASS
+  raw=0.9 rules=["HIGH_CLIP","CONFLICT_PENALTY"]
+
+[L1-027] 代码里这里为什么用了 volatile
+  pred=CHAT_QA conf=0.637 tier=OFFER fallback=false
+  reason=-
+  kw_sug=READ_CODE kw_score=0.75
+  kw_hits=["代码里","为什么"]
+  neg=[]
+  slot=1 slotVR=PASS
+  raw=0.95 rules=["HIGH_CLIP","CONFLICT_PENALTY"]
+
+[L1-030] 代码逻辑我看不太懂,讲讲
+  pred=CHAT_QA conf=0.658 tier=OFFER fallback=false
+  reason=-
+  kw_sug=READ_CODE kw_score=0.8333333333333333
+  kw_hits=["看","逻辑","讲讲"]
+  neg=[]
+  slot=1 slotVR=PASS
+  raw=0.95 rules=["HIGH_CLIP","CONFLICT_PENALTY"]
+
+[L1-031] what does the LlmToolGate do with write tools under READ_CODE
+  pred=CHAT_QA conf=0.700 tier=OFFER fallback=false
+  reason=-
+  kw_sug=READ_CODE kw_score=1
+  kw_hits=["what does"]
+  neg=[]
+  slot=1 slotVR=PASS
+  raw=0.95 rules=["HIGH_CLIP","CONFLICT_PENALTY"]
+
+[L1-043] 为什么 grep 这次匹配不到
+  pred=CHAT_QA conf=0.887 tier=DIRECT fallback=false
+  reason=-
+  kw_sug=CHAT_QA kw_score=1
+  kw_hits=["为什么"]
+  neg=[]
+  slot=1 slotVR=PASS
+  raw=0.95 rules=["HIGH_CLIP"]
+
+[L1-046] how does our project integrate with Spring AI
+  pred=CHAT_QA conf=0.700 tier=OFFER fallback=false
+  reason=-
+  kw_sug=READ_CODE kw_score=1
+  kw_hits=["how does"]
+  neg=[]
+  slot=1 slotVR=PASS
+  raw=0.95 rules=["HIGH_CLIP","CONFLICT_PENALTY"]
+
+[L1-049] explain 一下 ThreadPool 那个类
+  pred=CHAT_QA conf=0.637 tier=OFFER fallback=false
+  reason=-
+  kw_sug=READ_CODE kw_score=0.75
+  kw_hits=["explain","explain"]
+  neg=[]
+  slot=1 slotVR=PASS
+  raw=0.95 rules=["HIGH_CLIP","CONFLICT_PENALTY"]
+
+[L1-102] do not edit anything, just explain
+  pred=CHAT_QA conf=0.512 tier=CLARIFY fallback=false
+  reason=-
+  kw_sug=READ_CODE kw_score=0.75
+  kw_hits=["explain","explain"]
+  neg=["just","do not"]
+  slot=1 slotVR=PASS
+  raw=0.95 rules=["HIGH_CLIP","CONFLICT_PENALTY"]
+
+=== READ_CODE → RUN_COMMAND (6) ===
+
+[L1-033] grep 一下所有调用 NoteStore.save 的地方
+  pred=RUN_COMMAND conf=0.590 tier=CLARIFY fallback=false
+  reason=-
+  kw_sug=RUN_COMMAND kw_score=1
+  kw_hits=["test"]
+  neg=[]
+  raw=0.95 rules=["HIGH_CLIP"]
+
+[L1-034] list_dir 看一下 src/test 下有哪些测试
+  pred=RUN_COMMAND conf=0.590 tier=CLARIFY fallback=false
+  reason=-
+  kw_sug=READ_CODE kw_score=0.75
+  kw_hits=["看","看一下","测试","test"]
+  neg=[]
+  raw=0.95 rules=["HIGH_CLIP","CONFLICT_PENALTY"]
+
+[L1-121] git status 看一下
+  pred=RUN_COMMAND conf=0.590 tier=CLARIFY fallback=false
+  reason=-
+  kw_sug=READ_CODE kw_score=1
+  kw_hits=["看","看一下"]
+  neg=[]
+  raw=0.95 rules=["HIGH_CLIP","CONFLICT_PENALTY"]
+
+[L1-122] git diff 看一下当前改了什么
+  pred=RUN_COMMAND conf=0.590 tier=CLARIFY fallback=false
+  reason=-
+  kw_sug=READ_CODE kw_score=0.8333333333333333
+  kw_hits=["看","看一下","改"]
+  neg=[]
+  raw=0.95 rules=["HIGH_CLIP","CONFLICT_PENALTY"]
+
+[L1-129] 看一下 java 版本
+  pred=RUN_COMMAND conf=0.590 tier=CLARIFY fallback=false
+  reason=-
+  kw_sug=READ_CODE kw_score=1
+  kw_hits=["看","看一下"]
+  neg=[]
+  raw=0.95 rules=["HIGH_CLIP","CONFLICT_PENALTY"]
+
+[L1-131] 看一下 mvn 的版本
+  pred=RUN_COMMAND conf=0.590 tier=CLARIFY fallback=false
+  reason=-
+  kw_sug=READ_CODE kw_score=0.8333333333333333
+  kw_hits=["看","看一下","mvn"]
+  neg=[]
+  raw=0.95 rules=["HIGH_CLIP","CONFLICT_PENALTY"]
+
+=== READ_CODE correctly classified (sample) ===
+[L1-019] 看下 TaskPlan 的状态机 | hits=["看","看下","plan"] rules=["HIGH_CLIP"]
+[L1-021] 看下这文件 | hits=["看","看下"] rules=["HIGH_CLIP"]
+[L1-023] 那个工具类你给我看看 | hits=["看","看看"] rules=["HIGH_CLIP"]
+[L1-024] 看下 L1 是怎么把 llm_conf 融合到 final_conf 的 | hits=["看","看下"] rules=["HIGH_CLIP"]
+[L1-028] 稍微看看就行,别改 | hits=["看","看看","改"] rules=["HIGH_CLIP"]
+[L1-029] 看一下这个文件的结构,just browsing | hits=["看","看一下"] rules=["HIGH_CLIP"]
+[L1-035] read_file 一下 README.md | hits=[] rules=["HIGH_CLIP"]
+[L1-038] 看下缓存的实现 | hits=["看","看下","实现","实现"] rules=["HIGH_CLIP"]
+[L1-040] 讲讲我们项目里这个缓存是咋实现的 | hits=["实现","实现","讲讲"] rules=["HIGH_CLIP"]
+[L1-042] 看下我们项目里 async 任务是怎么调度的 | hits=["看","看下"] rules=["HIGH_CLIP"]
+
+=== Patterns for READ_CODE → CHAT_QA ===
+  3x  explain,explain
+  2x  (none)
+  1x  看,看下
+  1x  为什么,代码里
+  1x  看,讲讲,逻辑
+  1x  what does
+  1x  为什么
+  1x  how does
+
+=== Calibration rules for READ_CODE misclassified ===
+  13x  CONFLICT_PENALTY,HIGH_CLIP
+  2x  HIGH_CLIP,NO_EVIDENCE_CAP
+  2x  HIGH_CLIP
+
+=== LLM raw conf distribution for READ_CODE → CHAT_QA ===
+{ '<0.5': 0, '0.5-0.7': 0, '0.7-0.85': 0, '>0.85': 11 }
+
+=== Keyword suggested vs LLM primary for READ_CODE → CHAT_QA ===
+  [L1-020] llm_raw=0.95 kw_sug=READ_CODE (LLM chose CHAT_QA)
+  [L1-022] llm_raw=0.95 kw_sug=null (LLM chose CHAT_QA)
+  [L1-025] llm_raw=0.95 kw_sug=null (LLM chose CHAT_QA)
+  [L1-026] llm_raw=0.9 kw_sug=READ_CODE (LLM chose CHAT_QA)
+  [L1-027] llm_raw=0.95 kw_sug=READ_CODE (LLM chose CHAT_QA)
+  [L1-030] llm_raw=0.95 kw_sug=READ_CODE (LLM chose CHAT_QA)
+  [L1-031] llm_raw=0.95 kw_sug=READ_CODE (LLM chose CHAT_QA)
+  [L1-043] llm_raw=0.95 kw_sug=CHAT_QA (LLM chose CHAT_QA)
+  [L1-046] llm_raw=0.95 kw_sug=READ_CODE (LLM chose CHAT_QA)
+  [L1-049] llm_raw=0.95 kw_sug=READ_CODE (LLM chose CHAT_QA)
+  [L1-102] llm_raw=0.95 kw_sug=READ_CODE (LLM chose CHAT_QA)
+
+=== CONFLICT_PENALTY triggered? ===
+CONFLICT_PENALTY hit: 8 / 11
+HIGH_CLIP hit: 11 / 11
+NO_EVIDENCE_CAP hit: 2 / 11
+
+=== Did LLM also pick CHAT_QA? ===
+LLM same as pred (CHAT_QA): 11 (since pred is CHAT_QA and likely from LLM)
+raw_llm_conf >= 0.5 (LLM did respond): 11
+
+=== WRITE_PROJECT → READ_CODE (false positives) ===
+[L1-071] fix一下这个 NPE,看了一会儿没看出来
+  kw_hits=["看","fix"] rules=["HIGH_CLIP"]
+[L1-091] 帮我看下这里为什么报错,然后修一下
+  kw_hits=["看","看下","为什么"] rules=["HIGH_CLIP"]
+
+=== READ_CODE tier distribution ===
+{ OFFER: 15, DIRECT: 9, CLARIFY: 9 }
+
+=== READ_CODE → CHAT_QA tier distribution ===
+{ OFFER: 7, CLARIFY: 3, DIRECT: 1 }

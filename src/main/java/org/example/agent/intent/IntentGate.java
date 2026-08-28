@@ -31,6 +31,7 @@ public class IntentGate {
     private final IntentPrompter prompter;
     private final IntentFallbackPolicy fallbackPolicy;
     private final CliIntentProperties properties;
+    private final StrongPatternClassifier strongPatterns;   // 第三阶段新增
     private final String lightModel;
     private final String codeModel;
     private final String generalModel;
@@ -48,6 +49,7 @@ public class IntentGate {
                       IntentPrompter prompter,
                       IntentFallbackPolicy fallbackPolicy,
                       CliIntentProperties properties,
+                      StrongPatternClassifier strongPatterns,
                       @Value("${cli.intent.model-routing.light:qwen3.7-flash}") String lightModel,
                       @Value("${cli.intent.model-routing.code:qwen3.7-plus}") String codeModel,
                       @Value("${cli.intent.model-routing.general:qwen3.7-plus}") String generalModel,
@@ -63,6 +65,7 @@ public class IntentGate {
         this.prompter = prompter;
         this.fallbackPolicy = fallbackPolicy;
         this.properties = properties;
+        this.strongPatterns = strongPatterns == null ? new StrongPatternClassifier() : strongPatterns;
         this.lightModel = lightModel;
         this.codeModel = codeModel;
         this.generalModel = generalModel;
@@ -133,18 +136,49 @@ public class IntentGate {
         }
 
         // 4) 三档决策
-        L1IntentResult.Tier tier = result.tier(properties.l1().thresholds());
+        // 4.0) 第三阶段:强 pattern 触发 → 强制 CLARIFY(模板化反问,不递归 classifyFresh)
+        //      触发条件:StrongPatternClassifier 命中任意 pattern
+        //              && LLM primary ∈ {READ_CODE, WRITE_PROJECT, RUN_COMMAND, PLANNING}
+        //              (不强制"关键词层无编程意图"——见设计说明,简化 Q3-A)
+        boolean strongPatternTriggered = false;
+        StrongPatternClassifier.ClassificationResult sp = strongPatterns.classify(userInput);
+        List<StrongPatternClassifier.PatternType> spTypes = sp.matchedTypes().stream()
+                .sorted()
+                .toList();
+        if (!sp.empty() && llmOut.primary() != null) {
+            IntentLabel p = llmOut.primary();
+            if (p == IntentLabel.READ_CODE || p == IntentLabel.WRITE_PROJECT
+                    || p == IntentLabel.RUN_COMMAND || p == IntentLabel.PLANNING) {
+                strongPatternTriggered = true;
+            }
+        }
+
+        L1IntentResult.Tier tier = strongPatternTriggered
+                ? L1IntentResult.Tier.CLARIFY
+                : result.tier(properties.l1().thresholds());
         IntentLabel chosen = result.primary();
+        // 反问文本(强 pattern 触发时生成一次,供 attach 到 ctx;suppress=true 也生成)
+        String strongPatternClarifyText = null;
         switch (tier) {
             case DIRECT -> { /* 选 primary */ }
             case OFFER -> chosen = prompter.promptOffer(userInput, result);
             case CLARIFY -> {
-                String clarified = prompter.promptClarify(userInput, result);
-                if (clarified != null && !clarified.isBlank() && !clarified.equals(userInput)) {
-                    L1IntentResult secondRound = classifyFresh(executionId, clarified);
-                    if (secondRound != null) {
-                        result = secondRound;
-                        chosen = result.primary();
+                if (strongPatternTriggered) {
+                    // 第三阶段:不走原有 promptClarify(它读 stdin),
+                    // 也不递归 classifyFresh(避免被反问文本再次触发强 pattern 形成死循环)。
+                    // 由 prompter 模板化生成反问文本,挂到 IntentContext 供 eval / 日志观测。
+                    strongPatternClarifyText = prompter.promptStrongPatternClarify(
+                            userInput, result.primary(), spTypes);
+                    // 保留原 conf(决策 B:不强制 cap 到 0.59,保留 LLM 原始信号)
+                    // chosen 不改 —— primary 仍是 LLM 判的写读类
+                } else {
+                    String clarified = prompter.promptClarify(userInput, result);
+                    if (clarified != null && !clarified.isBlank() && !clarified.equals(userInput)) {
+                        L1IntentResult secondRound = classifyFresh(executionId, clarified);
+                        if (secondRound != null) {
+                            result = secondRound;
+                            chosen = result.primary();
+                        }
                     }
                 }
             }
@@ -161,6 +195,11 @@ public class IntentGate {
         // 5) 解析模型路由 → 实际 model name
         String resolvedModel = resolveModelName(finalResult.modelRouteHint());
         IntentContext ctx = new IntentContext(finalResult, resolvedModel);
+        ctx.setDecidedTier(tier); // 第三阶段:把决策后的 tier 挂到 ctx(强 pattern 强制改写时尤其重要)
+        if (strongPatternTriggered) {
+            List<String> typeNames = spTypes.stream().map(Enum::name).toList();
+            ctx.attachStrongPattern(typeNames, strongPatternClarifyText);
+        }
 
         recordLog(executionId, userInput, llmOut, sig, finalResult, ctx);
         return ctx;
@@ -246,11 +285,15 @@ public class IntentGate {
                 sig == null ? List.of() : sig.negativeSignals(),
                 finalResult.primary().name(),
                 finalResult.confidence(),
-                finalResult.tier(properties.l1().thresholds()).name(),
+                // 第三阶段:强 pattern 触发时 tier 强制改写,recordLog 也要反映
+                ctx.isClarifiedByStrongPattern() ? "CLARIFY" :
+                        finalResult.tier(properties.l1().thresholds()).name(),
                 finalResult.modelRouteHint().name(),
                 ctx.resolvedModel(),
                 finalResult.fallback(),
-                finalResult.fallbackReason());
+                finalResult.fallbackReason(),
+                ctx.strongPatternTypes(),
+                ctx.clarifyText());
         for (IntentLogSink sink : logSinks) {
             try { sink.onL1(event); } catch (Exception ex) { log.warn("intent log sink failed: {}", ex.getMessage()); }
         }
@@ -284,6 +327,9 @@ public class IntentGate {
             List<String> negativeSignals,
             String finalLabel, double finalConfidence,
             String tier, String modelRouteHint, String resolvedModel,
-            boolean fallback, String fallbackReason
+            boolean fallback, String fallbackReason,
+            // 第三阶段:强 pattern 触发标记 + 反问文本
+            List<String> strongPatternTypes,
+            String clarifyText
     ) {}
 }

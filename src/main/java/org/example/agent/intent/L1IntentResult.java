@@ -20,7 +20,7 @@ import java.util.Map;
  * @param slots         提取出的参数;填不出来置 null
  * @param negativeSignals 反向信号列表,如"不要 / 只是 / 先别"
  * @param modelRouteHint 路由建议
- * @param fallback      是否经过降级(解析失败 / 超时 → OFF_TOPIC)
+ * @param fallback      是否经过降级(解析失败 / 超时 → defaultLabel=CHAT_QA)
  * @param fallbackReason 降级原因,可空
  * @param appliedCalibrationRules 校准器实际触发的规则名(空 list 表示未校准或 disabled)
  * @param calibrationDiagnostics  校准步骤诊断:{raw, after_high_clip, ..., final}

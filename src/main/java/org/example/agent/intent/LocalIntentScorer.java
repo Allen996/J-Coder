@@ -87,14 +87,16 @@ public class LocalIntentScorer {
         if (llm == null || llm.degraded() || llm.primary() == null) {
             // 整次分类视作失败 —— 直接走降级路径。
             // 方案 B:conf=0.0(不是 0.5),让 tier 自然落到 CLARIFY(< 0.60),
-            // 并在评测器里作为"未决策"被排除,不计入 top-1 / OFF_TOPIC subset。
-            // 历史值 0.5 会让 OFF_TOPIC 的兜底 label 算成 true positive,
-            // 反而在 LLM 超时场景下污染 OFF_TOPIC 召回率统计。
+            // 并在评测器里作为"未决策"被排除。
+            // 历史值 0.5 会让 defaultLabel 的兜底算成 true positive,
+            // 反而在 LLM 超时场景下污染召回率统计。
+            // 第三阶段:defaultLabel 由 OFF_TOPIC 改为 CHAT_QA。
             String reason = llm == null
                     ? "llm null"
                     : (llm.reason() == null || llm.reason().isBlank() ? "llm degraded" : llm.reason());
-            return new Scored(IntentLabel.OFF_TOPIC, 0.0,
-                    List.of(new L1IntentResult.Candidate(IntentLabel.OFF_TOPIC, 0.0)),
+            IntentLabel def = IntentLabel.CHAT_QA;
+            return new Scored(def, 0.0,
+                    List.of(new L1IntentResult.Candidate(def, 0.0)),
                     true, reason, 0.0, 0.5, 0.5, false, false, w());
         }
 
@@ -157,7 +159,7 @@ public class LocalIntentScorer {
         return top;
     }
 
-    /** WRITE/READ 二分时算"强冲突",其他组合(CHAT_QA / OFF_TOPIC 与写读)不算冲突。 */
+    /** WRITE/READ 二分时算"强冲突",其他组合(CHAT_QA 与写读)不算冲突。 */
     private boolean isWriteReadConflict(IntentLabel rule, IntentLabel llm) {
         if (rule == null || llm == null) return false;
         boolean ruleWrite = rule == IntentLabel.WRITE_PROJECT;

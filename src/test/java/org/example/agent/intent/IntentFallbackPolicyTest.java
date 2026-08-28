@@ -42,11 +42,11 @@ class IntentFallbackPolicyTest {
     }
 
     @Test
-    @DisplayName("buildFallback 总是 OFF_TOPIC / conf=0.0 / fallback=true(方案 B 第二阶段)")
+    @DisplayName("buildFallback 总是 CHAT_QA / conf=0.0 / fallback=true(方案 B 第二阶段,第三阶段改 defaultLabel)")
     void fallbackShape() {
         IntentFallbackPolicy p = new IntentFallbackPolicy(new CliIntentProperties());
         L1IntentResult r = p.buildFallback("exec-x", "parse error");
-        assertEquals(IntentLabel.OFF_TOPIC, r.primary());
+        assertEquals(IntentLabel.CHAT_QA, r.primary());
         // 方案 B 第二阶段:fallback conf 从 0.5 改成 0.0,
         // 让评测器视为"未决策"不计入 top-1。
         assertEquals(0.0, r.confidence(), 0.001);

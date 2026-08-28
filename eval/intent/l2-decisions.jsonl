@@ -38,13 +38,13 @@
 {"id":"L2-038","l1_label":"CHAT_QA","step":1,"tool":"edit_file","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under CHAT_QA","is_smoke":true,"tags":["chat","tool-under-chat","block","smoke"]}
 {"id":"L2-039","l1_label":"CHAT_QA","step":1,"tool":"git_status","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under CHAT_QA","is_smoke":true,"tags":["chat","tool-under-chat","block","smoke"]}
 {"id":"L2-040","l1_label":"CHAT_QA","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown tool","is_smoke":true,"tags":["unknown","block","smoke"]}
-{"id":"L2-041","l1_label":"OFF_TOPIC","step":1,"tool":"read_file","args_excerpt":"path=NoteStore.java","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
-{"id":"L2-042","l1_label":"OFF_TOPIC","step":1,"tool":"grep","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
-{"id":"L2-043","l1_label":"OFF_TOPIC","step":1,"tool":"run_shell","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
-{"id":"L2-044","l1_label":"OFF_TOPIC","step":1,"tool":"write_file","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
-{"id":"L2-045","l1_label":"OFF_TOPIC","step":1,"tool":"edit_file","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
-{"id":"L2-046","l1_label":"OFF_TOPIC","step":1,"tool":"git_commit","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
-{"id":"L2-047","l1_label":"OFF_TOPIC","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown tool","is_smoke":true,"tags":["unknown","block","smoke"]}
+{"id":"L2-041","l1_label":"CHAT_QA","step":1,"tool":"read_file","args_excerpt":"path=NoteStore.java","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
+{"id":"L2-042","l1_label":"CHAT_QA","step":1,"tool":"grep","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
+{"id":"L2-043","l1_label":"CHAT_QA","step":1,"tool":"run_shell","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
+{"id":"L2-044","l1_label":"CHAT_QA","step":1,"tool":"write_file","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
+{"id":"L2-045","l1_label":"CHAT_QA","step":1,"tool":"edit_file","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
+{"id":"L2-046","l1_label":"CHAT_QA","step":1,"tool":"git_commit","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
+{"id":"L2-047","l1_label":"CHAT_QA","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown tool","is_smoke":true,"tags":["unknown","block","smoke"]}
 {"id":"L2-048","l1_label":"PLANNING","step":1,"tool":"read_file","args_excerpt":"path=NoteStore.java","gold_decision":"ALLOW","reason":"recommended under PLANNING (gather context)","is_smoke":false,"tags":["plan","recommended"]}
 {"id":"L2-049","l1_label":"PLANNING","step":1,"tool":"list_dir","args_excerpt":"path=src/main","gold_decision":"ALLOW","reason":"recommended under PLANNING","is_smoke":false,"tags":["plan","recommended"]}
 {"id":"L2-050","l1_label":"PLANNING","step":1,"tool":"glob_files","args_excerpt":"pattern=**/*.java","gold_decision":"ALLOW","reason":"recommended under PLANNING","is_smoke":false,"tags":["plan","recommended"]}
@@ -78,12 +78,12 @@
 {"id":"L2-078","l1_label":"CHAT_QA","step":1,"tool":"git_show","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under CHAT_QA","is_smoke":true,"tags":["chat","tool-under-chat","block","smoke"]}
 {"id":"L2-079","l1_label":"CHAT_QA","step":1,"tool":"check_command_exists","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under CHAT_QA","is_smoke":true,"tags":["chat","tool-under-chat","block","smoke"]}
 {"id":"L2-080","l1_label":"CHAT_QA","step":1,"tool":"git_diff","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under CHAT_QA","is_smoke":true,"tags":["chat","tool-under-chat","block","smoke"]}
-{"id":"L2-081","l1_label":"OFF_TOPIC","step":1,"tool":"glob_files","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
-{"id":"L2-082","l1_label":"OFF_TOPIC","step":1,"tool":"git_show","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
-{"id":"L2-083","l1_label":"OFF_TOPIC","step":1,"tool":"list_dir","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
-{"id":"L2-084","l1_label":"OFF_TOPIC","step":1,"tool":"check_command_exists","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
-{"id":"L2-085","l1_label":"OFF_TOPIC","step":1,"tool":"git_diff","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
-{"id":"L2-086","l1_label":"OFF_TOPIC","step":1,"tool":"git_log","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
+{"id":"L2-081","l1_label":"CHAT_QA","step":1,"tool":"glob_files","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
+{"id":"L2-082","l1_label":"CHAT_QA","step":1,"tool":"git_show","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
+{"id":"L2-083","l1_label":"CHAT_QA","step":1,"tool":"list_dir","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
+{"id":"L2-084","l1_label":"CHAT_QA","step":1,"tool":"check_command_exists","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
+{"id":"L2-085","l1_label":"CHAT_QA","step":1,"tool":"git_diff","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
+{"id":"L2-086","l1_label":"CHAT_QA","step":1,"tool":"git_log","args_excerpt":"","gold_decision":"BLOCK","reason":"tool not allowed under OFF_TOPIC","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
 {"id":"L2-087","l1_label":"PLANNING","step":2,"tool":"read_file","args_excerpt":"","gold_decision":"ALLOW","reason":"still gathering context under PLANNING","is_smoke":false,"tags":["plan","recommended"]}
 {"id":"L2-088","l1_label":"PLANNING","step":3,"tool":"grep","args_excerpt":"","gold_decision":"ALLOW","reason":"still gathering context","is_smoke":false,"tags":["plan","recommended"]}
 {"id":"L2-089","l1_label":"PLANNING","step":2,"tool":"write_file","args_excerpt":"path=plan.md","gold_decision":"WARN","reason":"write under PLANNING may be ok if writing the plan doc itself","is_smoke":false,"tags":["plan","write","warn"]}
@@ -106,7 +106,7 @@
 {"id":"L2-106","l1_label":"WRITE_PROJECT","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown","is_smoke":true,"tags":["unknown","block","smoke"]}
 {"id":"L2-107","l1_label":"RUN_COMMAND","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown","is_smoke":true,"tags":["unknown","block","smoke"]}
 {"id":"L2-108","l1_label":"CHAT_QA","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown","is_smoke":true,"tags":["unknown","block","smoke"]}
-{"id":"L2-109","l1_label":"OFF_TOPIC","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown","is_smoke":true,"tags":["unknown","block","smoke"]}
+{"id":"L2-109","l1_label":"CHAT_QA","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown","is_smoke":true,"tags":["unknown","block","smoke"]}
 {"id":"L2-110","l1_label":"PLANNING","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown","is_smoke":true,"tags":["unknown","block","smoke"]}
 {"id":"L2-111","l1_label":"READ_CODE","step":3,"tool":"run_shell","args_excerpt":"cmd=cat A.java","gold_decision":"REWRITE","gold_alt":"read_file","reason":"shell under READ → rewrite","is_smoke":true,"tags":["read","shell","rewrite","smoke"]}
 {"id":"L2-112","l1_label":"READ_CODE","step":1,"tool":"write_file","args_excerpt":"path=Notes","gold_decision":"REWRITE","gold_alt":"read_file","reason":"write under READ","is_smoke":true,"tags":["read","write-under-read","smoke"]}
@@ -130,8 +130,8 @@
 {"id":"L2-130","l1_label":"RUN_COMMAND","step":1,"tool":"edit_file","args_excerpt":"","gold_decision":"BLOCK","reason":"edit under RUN","is_smoke":true,"tags":["run","write-under-run","block","smoke"]}
 {"id":"L2-131","l1_label":"CHAT_QA","step":1,"tool":"read_file","args_excerpt":"","gold_decision":"BLOCK","reason":"not allowed under CHAT","is_smoke":true,"tags":["chat","tool-under-chat","block","smoke"]}
 {"id":"L2-132","l1_label":"CHAT_QA","step":1,"tool":"grep","args_excerpt":"","gold_decision":"BLOCK","reason":"not allowed under CHAT","is_smoke":true,"tags":["chat","tool-under-chat","block","smoke"]}
-{"id":"L2-133","l1_label":"OFF_TOPIC","step":1,"tool":"read_file","args_excerpt":"","gold_decision":"BLOCK","reason":"not allowed under OFF","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
-{"id":"L2-134","l1_label":"OFF_TOPIC","step":1,"tool":"grep","args_excerpt":"","gold_decision":"BLOCK","reason":"not allowed under OFF","is_smoke":true,"tags":["off","tool-under-off","block","smoke"]}
+{"id":"L2-133","l1_label":"CHAT_QA","step":1,"tool":"read_file","args_excerpt":"","gold_decision":"BLOCK","reason":"not allowed under OFF","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
+{"id":"L2-134","l1_label":"CHAT_QA","step":1,"tool":"grep","args_excerpt":"","gold_decision":"BLOCK","reason":"not allowed under OFF","is_smoke":true,"tags":["chat","tool-under-off","block","smoke"]}
 {"id":"L2-135","l1_label":"PLANNING","step":2,"tool":"read_file","args_excerpt":"path=X.md","gold_decision":"ALLOW","reason":"recommended","is_smoke":false,"tags":["plan","recommended"]}
 {"id":"L2-136","l1_label":"READ_CODE","step":3,"tool":"read_file","args_excerpt":"path=X.java","gold_decision":"ALLOW","reason":"recommended","is_smoke":false,"tags":["read","recommended"]}
 {"id":"L2-137","l1_label":"READ_CODE","step":2,"tool":"write_file","args_excerpt":"path=X.java","gold_decision":"REWRITE","gold_alt":"read_file","reason":"write under READ","is_smoke":true,"tags":["read","write-under-read","smoke"]}
@@ -142,7 +142,7 @@
 {"id":"L2-142","l1_label":"RUN_COMMAND","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown","is_smoke":true,"tags":["unknown","block","smoke"]}
 {"id":"L2-143","l1_label":"RUN_COMMAND","step":2,"tool":"git_log","args_excerpt":"","gold_decision":"ALLOW","reason":"recommended","is_smoke":false,"tags":["run","git"]}
 {"id":"L2-144","l1_label":"CHAT_QA","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown","is_smoke":true,"tags":["unknown","block","smoke"]}
-{"id":"L2-145","l1_label":"OFF_TOPIC","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown","is_smoke":true,"tags":["unknown","block","smoke"]}
+{"id":"L2-145","l1_label":"CHAT_QA","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown","is_smoke":true,"tags":["unknown","block","smoke"]}
 {"id":"L2-146","l1_label":"PLANNING","step":1,"tool":"unknown_tool","args_excerpt":"","gold_decision":"BLOCK","reason":"unknown","is_smoke":true,"tags":["unknown","block","smoke"]}
 {"id":"L2-147","l1_label":"WRITE_PROJECT","step":1,"tool":"edit_file","args_excerpt":"path=A.java","gold_decision":"ALLOW","reason":"recommended","is_smoke":false,"tags":["write","recommended"]}
 {"id":"L2-148","l1_label":"READ_CODE","step":1,"tool":"read_file","args_excerpt":"path=A.java","gold_decision":"ALLOW","reason":"recommended","is_smoke":false,"tags":["read","recommended"]}

@@ -37,9 +37,9 @@ class CliIntentPropertiesTest {
     }
 
     @Test
-    @DisplayName("fallback.default-label=null → 用 OFF_TOPIC")
+    @DisplayName("fallback.default-label=null → 用 CHAT_QA(第三阶段从 OFF_TOPIC 改)")
     void nullFallbackLabel() {
         CliIntentProperties.Fallback f = new CliIntentProperties.Fallback(true, null);
-        assertEquals(IntentLabel.OFF_TOPIC, f.defaultLabel());
+        assertEquals(IntentLabel.CHAT_QA, f.defaultLabel());
     }
 }
