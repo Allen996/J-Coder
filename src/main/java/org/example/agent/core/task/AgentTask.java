@@ -38,6 +38,17 @@ public class AgentTask {
     private final String role;
 
     /**
+     * Agent 类型，用于工具注册过滤（阶段 1 引入）。
+     * <ul>
+     *   <li>"main" 或 null —— 主 Agent，拿到所有工具（包括主 Agent 专属工具）</li>
+     *   <li>"subagent" —— SubAgent，按 {@code ToolDescriptorRegistry.mainAgentOnly} 过滤掉主 Agent 专属工具</li>
+     * </ul>
+     * 留空等价于 "main"。
+     */
+    @Builder.Default
+    private final String agentRole = "main";
+
+    /**
      * 提示词注册表 id（详见 agent-prompt）。未指定时使用默认 chat prompt。
      * 例如 "chat.react-assistant"、"aiops.planner"。
      */

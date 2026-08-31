@@ -15,6 +15,7 @@ package org.example.agent.tool.spi;
  * @param timeoutMs     单次调用超时（毫秒）。{@code 0} 表示沿用 {@code cli.tool.default-timeout-ms}
  * @param cacheable     是否可外置到磁盘缓存（recall_tool_result 召回）
  * @param readonly      是否无副作用。readonly 工具可在 ReActLoop 中并发分发
+ * @param mainAgentOnly 是否仅主 Agent 可见。true 时 SubAgent 工具注册会被过滤掉（物理隔离）
  */
 public record ToolDescriptor(
         String name,
@@ -24,36 +25,55 @@ public record ToolDescriptor(
         String description,
         long timeoutMs,
         boolean cacheable,
-        boolean readonly
+        boolean readonly,
+        boolean mainAgentOnly
 ) {
 
-    /** 默认 LOW：不需授权、不走命令闸、不写盘、可外置、可并发。 */
+    /** 默认 LOW：不需授权、不走命令闸、不写盘、可外置、可并发、SubAgent 可见。 */
     public static ToolDescriptor low(String name, String description) {
         return new ToolDescriptor(name, ToolRisk.LOW, false, false, description,
-                0L, true, true);
+                0L, true, true, false);
     }
 
-    /** LOW 但不可外置缓存（如 check_command_exists,结果依赖 PATH 状态）。可并发。 */
+    /** LOW 但不可外置缓存（如 check_command_exists,结果依赖 PATH 状态）。可并发、SubAgent 可见。 */
     public static ToolDescriptor lowNonCacheable(String name, String description) {
         return new ToolDescriptor(name, ToolRisk.LOW, false, false, description,
-                0L, false, true);
+                0L, false, true, false);
     }
 
-    /** 默认 MEDIUM：写工具,不可外置、不可并发。{@code reversible} 由调用方指定。 */
+    /** 默认 MEDIUM：写工具,不可外置、不可并发。{@code reversible} 由调用方指定。SubAgent 可见。 */
     public static ToolDescriptor medium(String name, boolean reversible, String description) {
         return new ToolDescriptor(name, ToolRisk.MEDIUM, reversible, false, description,
-                0L, false, false);
+                0L, false, false, false);
     }
 
-    /** HIGH：shell 类,不走外置缓存、不可并发。 */
+    /** HIGH：shell 类,不走外置缓存、不可并发。SubAgent 可见（默认）。 */
     public static ToolDescriptor high(String name, String description) {
         return new ToolDescriptor(name, ToolRisk.HIGH, false, true, description,
-                0L, false, false);
+                0L, false, false, false);
+    }
+
+    /** 主 Agent 专属 LOW：与 low() 相同，但 {@code mainAgentOnly=true}。SubAgent 拿不到。 */
+    public static ToolDescriptor lowMainOnly(String name, String description) {
+        return new ToolDescriptor(name, ToolRisk.LOW, false, false, description,
+                0L, true, true, true);
+    }
+
+    /** 主 Agent 专属 MEDIUM：与 medium() 相同，但 {@code mainAgentOnly=true}。SubAgent 拿不到。 */
+    public static ToolDescriptor mediumMainOnly(String name, boolean reversible, String description) {
+        return new ToolDescriptor(name, ToolRisk.MEDIUM, reversible, false, description,
+                0L, false, false, true);
     }
 
     /** 自定义超时的便捷方法。 */
     public ToolDescriptor withTimeout(long timeoutMs) {
         return new ToolDescriptor(name, risk, reversible, commandGate, description,
-                timeoutMs, cacheable, readonly);
+                timeoutMs, cacheable, readonly, mainAgentOnly);
+    }
+
+    /** 标记为主 Agent 专属（覆盖现有 mainAgentOnly 字段）。 */
+    public ToolDescriptor markMainAgentOnly() {
+        return new ToolDescriptor(name, risk, reversible, commandGate, description,
+                timeoutMs, cacheable, readonly, true);
     }
 }

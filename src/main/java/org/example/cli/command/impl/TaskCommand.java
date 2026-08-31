@@ -1,17 +1,14 @@
 package org.example.cli.command.impl;
 
-import org.example.agent.core.task.Checkpoint;
-import org.example.agent.core.task.SubTask;
+import org.example.agent.core.task.dag.DagNode;
 import org.example.agent.core.task.orchestrator.TaskOrchestrator;
 import org.example.cli.bootstrap.CliContext;
 import org.example.cli.command.SlashCommand;
 import org.example.cli.renderer.AnsiStyle;
 import org.springframework.stereotype.Component;
 
-import java.util.Optional;
-
 /**
- * /task &lt;taskId&gt; —— 显示单个 SubTask 详情（part5 §8.8 CLI 渲染）。
+ * /task &lt;taskId&gt; —— 显示单个 DAG 节点详情（阶段 2 重写）。
  */
 @Component
 public class TaskCommand implements SlashCommand {
@@ -29,7 +26,7 @@ public class TaskCommand implements SlashCommand {
 
     @Override
     public String description() {
-        return "show one SubTask detail by id (Part 5 §8.8)";
+        return "show one DAG node detail by id (stage 2)";
     }
 
     @Override
@@ -40,53 +37,44 @@ public class TaskCommand implements SlashCommand {
             ctx.out().flush();
             return 2;
         }
-        var planOpt = orchestrator.activePlan();
-        if (planOpt.isEmpty()) {
+        var graphOpt = orchestrator.activeGraph();
+        if (graphOpt.isEmpty()) {
             ctx.out().println(AnsiStyle.wrap(AnsiStyle.YELLOW, "(no active plan)"));
             ctx.out().flush();
             return 0;
         }
-        Optional<SubTask> subOpt = orchestrator.findSubTaskForRender(taskId);
-        if (subOpt.isEmpty()) {
-            ctx.out().println(AnsiStyle.wrap(AnsiStyle.RED, "subtask not found: " + taskId));
+        DagNode node = graphOpt.get().get(taskId);
+        if (node == null) {
+            ctx.out().println(AnsiStyle.wrap(AnsiStyle.RED, "node not found: " + taskId));
             ctx.out().flush();
             return 2;
         }
-        SubTask sub = subOpt.get();
         StringBuilder sb = new StringBuilder();
-        sb.append("[").append(sub.getTaskId()).append("] ")
-                .append(sub.getStatus()).append(" · ").append(sub.getType()).append('\n');
-        sb.append("title: ").append(sub.getTitle()).append('\n');
-        if (sub.getDescription() != null && !sub.getDescription().isBlank()) {
-            sb.append("description: ").append(sub.getDescription()).append('\n');
+        sb.append("[").append(node.getTaskId()).append("] ")
+                .append(node.getState()).append('\n');
+        sb.append("title: ").append(node.getTitle()).append('\n');
+        if (!node.getDescription().isBlank()) {
+            sb.append("description: ").append(node.getDescription()).append('\n');
         }
-        sb.append("dependsOn: ").append(sub.getDependsOn()).append('\n');
-        sb.append("attempts: ").append(sub.getAttempts()).append('\n');
-        sb.append("artifacts: ").append(sub.getArtifacts()).append('\n');
-        if (sub.getDone() != null && !sub.getDone().isBlank()) {
-            sb.append("\n-- done --\n").append(sub.getDone()).append('\n');
+        if (!node.getExpectedOutput().isBlank()) {
+            sb.append("expected: ").append(node.getExpectedOutput()).append('\n');
         }
-        if (sub.getCurrentAction() != null && !sub.getCurrentAction().isBlank()) {
-            sb.append("\n-- in progress --\n").append(sub.getCurrentAction()).append('\n');
-        }
-        if (sub.getNextStep() != null && !sub.getNextStep().isBlank()) {
-            sb.append("\n-- next step --\n").append(sub.getNextStep()).append('\n');
-        }
-        if (sub.getFailureReason() != null && !sub.getFailureReason().isBlank()) {
-            sb.append("\n-- failure --\n").append(sub.getFailureReason()).append('\n');
-        }
-        if (!sub.getCheckpoints().isEmpty()) {
-            sb.append("\n-- checkpoints (").append(sub.getCheckpoints().size()).append(") --\n");
-            for (Checkpoint ck : sub.getCheckpoints()) {
-                sb.append("  • ").append(ck.getCheckpointId())
-                        .append(ck.isAutomatic() ? " (auto)" : " (manual)")
-                        .append(" — ").append(ck.getNote()).append('\n');
-                if (!ck.getFiles().isEmpty()) {
-                    sb.append("    files: ").append(String.join(", ", ck.getFiles())).append('\n');
-                }
-                if (!ck.getFunctions().isEmpty()) {
-                    sb.append("    fns:   ").append(String.join(", ", ck.getFunctions())).append('\n');
-                }
+        sb.append("dependsOn: ").append(node.dependencies()).append('\n');
+        sb.append("attempts: ").append(node.getAttempts()).append('\n');
+        if (node.getStartedAt() != null) sb.append("startedAt: ").append(node.getStartedAt()).append('\n');
+        if (node.getCompletedAt() != null) sb.append("completedAt: ").append(node.getCompletedAt()).append('\n');
+        if (node.getLastResult() != null) {
+            sb.append("\n-- last result --\n");
+            sb.append("status: ").append(node.getLastResult().getStatus()).append('\n');
+            sb.append("duration: ").append(node.getLastResult().getDurationMs()).append("ms\n");
+            if (!node.getLastResult().getReason().isBlank()) {
+                sb.append("reason: ").append(node.getLastResult().getReason()).append('\n');
+            }
+            if (!node.getLastResult().getArtifacts().isEmpty()) {
+                sb.append("artifacts: ").append(node.getLastResult().getArtifacts()).append('\n');
+            }
+            if (!node.getLastResult().getReport().isBlank()) {
+                sb.append("report: ").append(node.getLastResult().getReport()).append('\n');
             }
         }
         ctx.out().print(sb.toString());

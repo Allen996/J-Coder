@@ -36,16 +36,16 @@ public class PauseCommand implements SlashCommand {
 
     @Override
     public int execute(String args, CliContext ctx) {
-        if (orchestrator.activePlan().isEmpty()) {
+        if (orchestrator.activeGraph().isEmpty()) {
             ctx.out().println(AnsiStyle.wrap(AnsiStyle.YELLOW, "(no active plan)"));
             ctx.out().flush();
             return 0;
         }
         orchestrator.pauseActivePlan();
         ctx.out().println(AnsiStyle.wrap(AnsiStyle.GREEN_BOLD,
-                "plan " + orchestrator.activePlan().get().getPlanId() + " paused"));
+                "plan " + orchestrator.activeGraph().get().getPlanId() + " paused"));
         ctx.out().println(AnsiStyle.wrap(AnsiStyle.GRAY_DIM,
-                "use /plan-resume to continue, or /tasks to inspect"));
+                "use /tasks to inspect"));
         ctx.out().flush();
         return 0;
     }

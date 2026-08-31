@@ -30,14 +30,14 @@ public class TasksCommand implements SlashCommand {
 
     @Override
     public int execute(String args, CliContext ctx) {
-        var planOpt = orchestrator.activePlan();
-        if (planOpt.isEmpty()) {
+        var graphOpt = orchestrator.activeGraph();
+        if (graphOpt.isEmpty()) {
             ctx.out().println(AnsiStyle.wrap(AnsiStyle.YELLOW,
                     "(no active plan — create one via /create_plan tool call inside an agent turn)"));
             ctx.out().flush();
             return 0;
         }
-        String text = orchestrator.queryPlanAsText(planOpt.get().getPlanId());
+        String text = orchestrator.queryPlanAsText(graphOpt.get().getPlanId());
         ctx.out().print(text);
         ctx.out().flush();
         return 0;

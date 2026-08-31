@@ -1,0 +1,12 @@
+{
+  "schema" : "3",
+  "kind" : "mid-term",
+  "sessionId" : "sess-p",
+  "createdAt" : "2026-08-30T08:00:34.710465800Z",
+  "updatedAt" : "2026-08-30T08:00:34.710465800Z",
+  "messages" : [ {
+    "role" : "meta",
+    "content" : "[window-replace] 0→0 tokens manual persistMidTerm",
+    "timestamp" : "2026-08-30T08:00:34.709699900Z"
+  } ]
+}

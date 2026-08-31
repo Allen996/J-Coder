@@ -8,7 +8,6 @@ import org.example.agent.core.observer.ReActLoopObserver;
 import org.example.agent.core.signal.ReActLoopSignal;
 import org.example.agent.tool.ToolDeniedException;
 import org.example.agent.tool.ToolExecutionException;
-import org.example.agent.tool.cache.ToolResultStore;
 import org.example.agent.tool.config.CliToolProperties;
 import org.example.agent.tool.failure.FailureClassifier;
 import org.example.agent.tool.failure.FailureKind;
@@ -73,7 +72,6 @@ public class ToolGateway {
     private final RetryPolicy retryPolicy;
     private final SideEffectTracker sideEffects;
     private final CliToolProperties properties;
-    private final ToolResultStore resultStore;
     private final ExecutorService toolExecutor;
     private final AuthorizationGate authGate;
 
@@ -84,7 +82,6 @@ public class ToolGateway {
                        RetryPolicy retryPolicy,
                        SideEffectTracker sideEffects,
                        CliToolProperties properties,
-                       ToolResultStore resultStore,
                        @Qualifier("toolExecutor") ExecutorService toolExecutor,
                        AuthorizationGate authGate) {
         this.callbacks = java.util.Arrays.stream(toolCallbackProvider.getToolCallbacks())
@@ -100,13 +97,12 @@ public class ToolGateway {
         this.retryPolicy = retryPolicy;
         this.sideEffects = sideEffects;
         this.properties = properties;
-        this.resultStore = resultStore;
         this.toolExecutor = toolExecutor;
         this.authGate = authGate;
     }
 
     /**
-     * 向后兼容的测试用 5 参构造器。生产路径不会走到 —— Spring 注入 9 参版。
+     * 向后兼容的测试用 5 参构造器。生产路径不会走到 —— Spring 注入 8 参版。
      * 旧测试默认走"全放行"授权闸，保证 MEDIUM 工具不被新闸误拦。
      */
     public ToolGateway(ToolCallbackProvider toolCallbackProvider,
@@ -115,7 +111,7 @@ public class ToolGateway {
                        RetryPolicy retryPolicy,
                        SideEffectTracker sideEffects) {
         this(toolCallbackProvider, descriptorRegistry, classifier, retryPolicy, sideEffects,
-                new CliToolProperties(), null, null, AllowAllAuthorizationGate.INSTANCE);
+                new CliToolProperties(), null, AllowAllAuthorizationGate.INSTANCE);
     }
 
     public Optional<ToolCallback> lookup(String name) {
@@ -188,10 +184,10 @@ public class ToolGateway {
                                     toolName, attempt, kind, sleepMs, cause.toString()));
             long ms = System.currentTimeMillis() - start;
 
-            // 成功 → 外置缓存(若 cacheable),并在末尾追加 #id
-            String annotated = appendStoredId(result, toolName, argsMap, executionId, descriptor);
-            emitObservation(executionId, stepIndex, toolName, ObservationEvent.Status.OK, annotated, ms, signal, observers);
-            return annotated;
+            // 阶段 5:工具结果不再单独存盘 —— 直接返回 result,不再追加 #id
+            // 完整结果已写入 short-term.json(由 SessionMessageStore 在 tool 消息落盘时记录)
+            emitObservation(executionId, stepIndex, toolName, ObservationEvent.Status.OK, result, ms, signal, observers);
+            return result;
         } catch (Throwable t) {
             long ms = System.currentTimeMillis() - start;
             return handleFailure(executionId, t, toolName, stepIndex, ms, argsMap, signal, observers);
@@ -235,27 +231,7 @@ public class ToolGateway {
         return properties.defaultTimeoutMs();
     }
 
-    /**
-     * 若工具结果可外置,同步写存储(单文件 < 几 ms),末尾追加 #id 提示 LLM。
-     * 失败不抛 —— 缓存是优化,不影响主路径。
-     */
-    private String appendStoredId(String result,
-                                  String toolName,
-                                  Map<String, Object> argsMap,
-                                  String executionId,
-                                  ToolDescriptor descriptor) {
-        if (descriptor == null || !descriptor.cacheable()) return result;
-        if (!properties.resultCache().enabled()) return result;
-        if (result == null) return null;
-        try {
-            String id = resultStore.save(toolName, argsMap, result, executionId, descriptor);
-            if (id == null) return result;
-            return result + "\n[stored as #" + id + "]";
-        } catch (Exception ex) {
-            log.warn("appendStoredId failed for tool={}: {}", toolName, ex.getMessage());
-            return result;
-        }
-    }
+    // 阶段 5:appendStoredId 删除 —— 工具结果不再单独存盘。完整结果走 short-term.json 全量记录。
 
     private String handleFailure(String executionId,
                                  Throwable t,

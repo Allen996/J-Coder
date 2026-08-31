@@ -1,0 +1,102 @@
+{
+  "top1_accuracy" : 0.7931,
+  "macro_f1" : 0.8138,
+  "fallback_rate" : 0.0333,
+  "tier_direct" : 25,
+  "tier_offer" : 11,
+  "tier_clarify" : 22,
+  "tier_error" : 0,
+  "per_class" : {
+    "CHAT_QA" : {
+      "precision" : 1.0,
+      "recall" : 0.5714,
+      "f1" : 0.7273,
+      "support" : 21.0
+    },
+    "PLANNING" : {
+      "precision" : 1.0,
+      "recall" : 1.0,
+      "f1" : 1.0,
+      "support" : 9.0
+    },
+    "READ_CODE" : {
+      "precision" : 0.4667,
+      "recall" : 0.7778,
+      "f1" : 0.5833,
+      "support" : 9.0
+    },
+    "RUN_COMMAND" : {
+      "precision" : 0.8889,
+      "recall" : 0.8889,
+      "f1" : 0.8889,
+      "support" : 9.0
+    },
+    "WRITE_PROJECT" : {
+      "precision" : 0.7692,
+      "recall" : 1.0,
+      "f1" : 0.8696,
+      "support" : 10.0
+    }
+  },
+  "confusion" : {
+    "CHAT_QA" : {
+      "CHAT_QA" : 12,
+      "READ_CODE" : 8,
+      "RUN_COMMAND" : 1
+    },
+    "PLANNING" : {
+      "PLANNING" : 9
+    },
+    "READ_CODE" : {
+      "READ_CODE" : 7,
+      "WRITE_PROJECT" : 2
+    },
+    "RUN_COMMAND" : {
+      "RUN_COMMAND" : 8,
+      "WRITE_PROJECT" : 1
+    },
+    "WRITE_PROJECT" : {
+      "WRITE_PROJECT" : 10
+    }
+  },
+  "no_decision_stats" : {
+    "count" : 2,
+    "excluded_from_top1_denominator" : true
+  },
+  "calibration_rules_triggered" : {
+    "HIGH_CLIP" : 41,
+    "NEG_OVERRIDE" : 1,
+    "NONE" : 17
+  },
+  "slot_gate" : {
+    "total_triggered" : 22,
+    "total_write_run" : 22
+  },
+  "strong_pattern_stats" : {
+    "total_triggered" : 0,
+    "total_rows" : 60,
+    "trigger_rate" : 0.0,
+    "by_type" : { },
+    "by_gold_label" : { },
+    "correct_after_clarify" : 0,
+    "still_write_read_primary" : 0
+  },
+  "generated_at" : "20260830-200456",
+  "split" : "test",
+  "n_rows" : 60,
+  "llm_mode" : "FAKE_HEURISTIC",
+  "scoring_weights" : {
+    "wLlm" : 0.6,
+    "wKeyword" : 0.2,
+    "wSlot" : 0.2,
+    "penConflict" : 0.15,
+    "penNegative" : 0.1
+  },
+  "wLlm" : 0.6,
+  "wKeyword" : 0.2,
+  "wSlot" : 0.2,
+  "penConflict" : 0.15,
+  "penNegative" : 0.1,
+  "per_row_report" : "intent-per-row-test-20260830-200456.jsonl",
+  "gate_strict" : false
+}

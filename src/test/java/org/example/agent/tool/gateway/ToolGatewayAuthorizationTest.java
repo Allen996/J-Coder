@@ -2,7 +2,6 @@ package org.example.agent.tool.gateway;
 
 import org.example.agent.core.observer.ReActLoopObserver;
 import org.example.agent.core.signal.ReActLoopSignal;
-import org.example.agent.tool.cache.ToolResultStore;
 import org.example.agent.tool.config.CliToolProperties;
 import org.example.agent.tool.failure.FailureClassifier;
 import org.example.agent.tool.failure.RetryPolicy;
@@ -163,7 +162,6 @@ class ToolGatewayAuthorizationTest {
                 new RetryPolicy(),
                 new NoopTracker(),
                 new CliToolProperties(),
-                new NoopStore(),
                 pool,
                 gate);
     }
@@ -216,15 +214,6 @@ class ToolGatewayAuthorizationTest {
         @Override public java.util.Optional<ToolDescriptor> get(String name) {
             return java.util.Optional.ofNullable(map.get(name));
         }
-    }
-
-    static class NoopStore implements ToolResultStore {
-        @Override public String save(String t, Map<String, Object> a, String r, String e, ToolDescriptor d) { return "abcdef12"; }
-        @Override public RecallResult recall(String id, Integer s, Integer ed, String p) { return new RecallResult.Ok(""); }
-        @Override public void invalidateByPath(java.nio.file.Path path) { }
-        @Override public List<String> scanIds(String text) { return List.of(); }
-        @Override public String metadataHint(String id) { return ""; }
-        @Override public void evictIfOverBudget() { }
     }
 
     static class NoopTracker implements SideEffectTracker {

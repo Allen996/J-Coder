@@ -1,14 +1,10 @@
 package org.example.cli.repl;
 
 import lombok.extern.slf4j.Slf4j;
-import org.example.agent.context.memory.MemoryTurnHook;
-import org.example.agent.context.memory.MidTermStore;
+import org.example.agent.context.session.SessionMessageStore;
 import org.example.agent.core.runtime.AgentRuntime;
 import org.example.agent.core.task.AgentTask;
-import org.example.agent.core.task.TaskPlan;
-import org.example.agent.core.task.TaskPlanStatus;
 import org.example.agent.core.task.orchestrator.TaskOrchestrator;
-import org.example.agent.core.task.persistence.TaskPlanRepository;
 import org.example.cli.bootstrap.CliContext;
 import org.example.cli.command.SlashCommandRegistry;
 import org.example.cli.input.AtFileResolver;
@@ -18,7 +14,6 @@ import org.example.cli.renderer.AnsiStyle;
 import org.example.cli.renderer.CliRenderer;
 import org.example.cli.renderer.StartupBanner;
 import org.example.cli.renderer.StatusLine;
-import org.example.cli.renderer.TaskProgressRenderer;
 import org.example.cli.session.SessionState;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
@@ -32,6 +27,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
@@ -73,13 +69,11 @@ public class ReplLoop {
     private final AtFileResolver atFileResolver;
     private final ShellPassthrough shellPassthrough;
     private final CliRenderer renderer;
-    private final TaskProgressRenderer taskRenderer;
     private final TaskOrchestrator orchestrator;
-    private final TaskPlanRepository taskPlanRepository;
     private final StartupBanner banner;
     private final StatusLine statusLine;
     private final MultiLineReader multiLineReader = new MultiLineReader();
-    private final MemoryTurnHook memoryTurnHook;
+    private final SessionMessageStore sessionStore;
 
     private final Path projectRoot;
     private final PrintWriter out;
@@ -96,10 +90,8 @@ public class ReplLoop {
                     AtFileResolver atFileResolver,
                     ShellPassthrough shellPassthrough,
                     CliRenderer renderer,
-                    TaskProgressRenderer taskRenderer,
                     TaskOrchestrator orchestrator,
-                    TaskPlanRepository taskPlanRepository,
-                    MemoryTurnHook memoryTurnHook,
+                    SessionMessageStore sessionStore,
                     StartupBanner banner,
                     StatusLine statusLine) {
         this.runtime = runtime;
@@ -110,10 +102,8 @@ public class ReplLoop {
         this.atFileResolver = atFileResolver;
         this.shellPassthrough = shellPassthrough;
         this.renderer = renderer;
-        this.taskRenderer = taskRenderer;
         this.orchestrator = orchestrator;
-        this.taskPlanRepository = taskPlanRepository;
-        this.memoryTurnHook = memoryTurnHook;
+        this.sessionStore = sessionStore;
         this.banner = banner;
         this.statusLine = statusLine;
         this.projectRoot = Paths.get("").toAbsolutePath();
@@ -228,22 +218,23 @@ public class ReplLoop {
 
     private void dispatchAgent(String raw, CliContext ctx) {
         // 空闲超时检测 (part4 §7.8 / §7.2):超过 SESSION_IDLE_MINUTES 分钟视为上一 session 结束,
-        // 触发 mid-term 整体重生成(part4 §7.2 "会话结束时整体重生成")。
+        // 当前新模型下不再做 mid-term LLM 整体重生成(已删除);改为追加 [meta] session-end 审计事件 + 强制落盘 mid-term。
         Instant now = Instant.now();
-        if (memoryTurnHook != null) {
-            Duration idle = Duration.between(lastTurnAt, now);
-            if (idle.toMinutes() >= SESSION_IDLE_MINUTES) {
-                try {
-                    MidTermStore.MidTerm regenerated = memoryTurnHook.regenerateForSession(session.getSessionId());
-                    out.println(AnsiStyle.wrap(AnsiStyle.GRAY_DIM,
-                            "[memory] idle " + idle.toMinutes() + "min >= " + SESSION_IDLE_MINUTES
-                                    + "min: regenerated mid-term for session "
-                                    + session.getSessionId()
-                                    + (regenerated == null ? " (no-op)" : "")));
-                    out.flush();
-                } catch (RuntimeException ex) {
-                    log.warn("Idle-triggered mid-term regeneration failed: {}", ex.getMessage());
+        Duration idle = Duration.between(lastTurnAt, now);
+        if (idle.toMinutes() >= SESSION_IDLE_MINUTES) {
+            try {
+                if (sessionStore != null) {
+                    sessionStore.addMeta(session.getSessionId(),
+                            "[session-end] idle " + idle.toMinutes() + "min >= " + SESSION_IDLE_MINUTES
+                                    + "min; mid-term.json persist");
+                    sessionStore.persistMidTerm(session.getSessionId());
                 }
+                out.println(AnsiStyle.wrap(AnsiStyle.GRAY_DIM,
+                        "[memory] idle " + idle.toMinutes() + "min >= " + SESSION_IDLE_MINUTES
+                                + "min: mid-term.json persisted for session " + session.getSessionId()));
+                out.flush();
+            } catch (RuntimeException ex) {
+                log.warn("Idle-triggered mid-term persist failed: {}", ex.getMessage());
             }
         }
         //解析带有@的文件，通过resolver进行解析，并报告加载了多少文件，有多少文件没有找到
@@ -306,17 +297,13 @@ public class ReplLoop {
         renderer.drainTo(out, 500);
 
         // Part 5 §8.8 / §8.9: 如果本轮 agent 创建了 TaskPlan，串行驱动 orchestrator
-        if (orchestrator.activePlan().isPresent()
-                && orchestrator.activePlan().get().getStatus()
-                        == org.example.agent.core.task.TaskPlanStatus.ACTIVE) {
+        if (orchestrator.activeGraph().isPresent()) {
             try {
                 orchestrator.runActivePlan();
-                taskRenderer.drainTo(out, 200);
                 out.println(AnsiStyle.wrap(AnsiStyle.CYAN_BOLD,
                         "[orchestrator] plan "
-                                + orchestrator.activePlan().map(p -> p.getPlanId()).orElse("?")
-                                + " finished: "
-                                + orchestrator.activePlan().map(p -> p.getStatus().name()).orElse("?")));
+                                + orchestrator.activeGraph().map(p -> p.getPlanId()).orElse("?")
+                                + " processed"));
                 out.flush();
             } catch (RuntimeException ex) {
                 out.println(AnsiStyle.wrap(AnsiStyle.RED_BOLD,
@@ -346,23 +333,29 @@ public class ReplLoop {
      * 不在 @PostConstruct 做是因为 stdin 尚未被 JLine 接管，不应阻塞上下文初始化。
      */
     private void printResumablePlans() {
-        if (taskPlanRepository == null) return;
+        // 阶段 2 起:DagStateRepository 按 sessionId 组织,通过 sessionStore.sessionsRoot 扫描
+        if (sessionStore == null) return;
         try {
-            List<TaskPlan> active = taskPlanRepository.listAllPlans().stream()
-                    .filter(p -> p.getStatus() == TaskPlanStatus.ACTIVE)
-                    .toList();
-            if (active.isEmpty()) return;
-            out.println(AnsiStyle.wrap(AnsiStyle.YELLOW_BOLD,
-                    "[resume] " + active.size() + " active plan(s) found on disk:"));
-            for (TaskPlan p : active) {
-                String paused = p.isPaused() ? " (paused)" : "";
-                String current = p.getCurrentTaskId() == null ? "" : "  current=" + p.getCurrentTaskId();
-                out.println(AnsiStyle.wrap(AnsiStyle.YELLOW,
-                        "  · " + p.getPlanId() + "  goal=" + truncate(p.getGoal(), 60) + paused + current));
+            Path sessionsRoot = sessionStore.sessionsRoot();
+            if (!Files.exists(sessionsRoot)) return;
+            int count = 0;
+            StringBuilder lines = new StringBuilder();
+            try (var stream = Files.list(sessionsRoot)) {
+                for (Path dir : (Iterable<Path>) stream::iterator) {
+                    if (!Files.isDirectory(dir)) continue;
+                    Path planJson = dir.resolve("plan.json");
+                    if (!Files.exists(planJson)) continue;
+                    lines.append("\n  · session=").append(dir.getFileName());
+                    count++;
+                }
             }
+            if (count == 0) return;
+            out.println(AnsiStyle.wrap(AnsiStyle.YELLOW_BOLD,
+                    "[resume] " + count + " session(s) with plan.json found on disk:"));
+            out.print(lines);
             out.println(AnsiStyle.wrap(AnsiStyle.GRAY_DIM,
-                    "  use /resume <planId> to adopt & resume, or /tasks to inspect"));
-        } catch (RuntimeException ex) {
+                    "  use /tasks to inspect active plan"));
+        } catch (Exception ex) {
             log.warn("printResumablePlans failed: {}", ex.getMessage());
         }
     }

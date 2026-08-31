@@ -26,11 +26,11 @@ public class IntentAwareToolSet {
     }
 
     private static final Map<IntentLabel, List<String>> RECOMMENDED = Map.of(
-            IntentLabel.READ_CODE, List.of("read_file", "list_dir", "glob_files", "grep", "git_show", "recall_tool_result"),
+            IntentLabel.READ_CODE, List.of("read_file", "list_dir", "glob_files", "grep", "git_show"),
             IntentLabel.WRITE_PROJECT, List.of("read_file", "list_dir", "grep", "write_file", "edit_file", "glob_files"),
             IntentLabel.RUN_COMMAND, List.of("run_shell", "check_command_exists", "git_status", "git_diff", "git_commit", "git_log"),
             IntentLabel.CHAT_QA, List.of(),
-            IntentLabel.PLANNING, List.of("read_file", "list_dir", "glob_files", "grep", "recall_tool_result")
+            IntentLabel.PLANNING, List.of("read_file", "list_dir", "glob_files", "grep")
     );
 
     public List<String> recommendedFor(IntentLabel label) {

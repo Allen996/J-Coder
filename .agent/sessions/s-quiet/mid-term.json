@@ -1,0 +1,48 @@
+{
+  "schema" : "3",
+  "kind" : "mid-term",
+  "sessionId" : "s-quiet",
+  "createdAt" : "2026-08-30T05:56:47.983014500Z",
+  "updatedAt" : "2026-08-30T05:56:47.983014500Z",
+  "messages" : [ {
+    "role" : "meta",
+    "content" : "[startup-recover] 40→40 tokens (rounds=9) mid-term.json missing; rebuilt from worklog",
+    "timestamp" : "2026-08-30T05:56:47.983014500Z"
+  }, {
+    "role" : "user",
+    "content" : "short user msg",
+    "timestamp" : "2026-08-30T05:56:47.983014500Z"
+  }, {
+    "role" : "assistant",
+    "content" : "short assistant msg",
+    "timestamp" : "2026-08-30T05:56:47.983014500Z"
+  }, {
+    "role" : "user",
+    "content" : "short user msg",
+    "timestamp" : "2026-08-30T05:56:47.983014500Z"
+  }, {
+    "role" : "assistant",
+    "content" : "short assistant msg",
+    "timestamp" : "2026-08-30T05:56:47.983014500Z"
+  }, {
+    "role" : "user",
+    "content" : "short user msg",
+    "timestamp" : "2026-08-30T05:56:47.983014500Z"
+  }, {
+    "role" : "assistant",
+    "content" : "short assistant msg",
+    "timestamp" : "2026-08-30T05:56:47.983014500Z"
+  }, {
+    "role" : "user",
+    "content" : "short user msg",
+    "timestamp" : "2026-08-30T05:56:47.983014500Z"
+  }, {
+    "role" : "assistant",
+    "content" : "short assistant msg",
+    "timestamp" : "2026-08-30T05:56:47.983014500Z"
+  }, {
+    "role" : "user",
+    "content" : "short user msg",
+    "timestamp" : "2026-08-30T05:56:47.983014500Z"
+  } ]
+}

@@ -7,7 +7,6 @@ import org.example.agent.context.layer.DynamicLayer;
 import org.example.agent.context.layer.StaticLayer;
 import org.example.agent.context.memory.LongTermStore;
 import org.example.agent.context.memory.MemoryIndex;
-import org.example.agent.context.memory.MidTermStore;
 import org.example.agent.context.observability.PromptDumpObserver;
 import org.example.agent.context.session.SessionMessageStore;
 import org.example.agent.core.event.AgentEvent;
@@ -71,7 +70,6 @@ class ContextRuntimeWiringTest {
                 new ConversationCompressor(),
                 staticLayer,
                 dynamicLayer,
-                new MidTermStore(),
                 new LongTermStore(),
                 new MemoryIndex(),
                 null);
@@ -86,7 +84,6 @@ class ContextRuntimeWiringTest {
                 toolProvider,
                 sideEffectTracker,
                 contextBuilder,
-                null,
                 sessionStore,
                 null,
                 executor);

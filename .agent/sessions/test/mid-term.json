@@ -1,0 +1,48 @@
+{
+  "schema" : "3",
+  "kind" : "mid-term",
+  "sessionId" : "test",
+  "createdAt" : "2026-08-30T05:56:48.551109300Z",
+  "updatedAt" : "2026-08-30T05:56:48.551109300Z",
+  "messages" : [ {
+    "role" : "meta",
+    "content" : "[startup-recover] 148→148 tokens (rounds=9) mid-term.json missing; rebuilt from worklog",
+    "timestamp" : "2026-08-30T05:56:48.540959900Z"
+  }, {
+    "role" : "user",
+    "content" : "round 6 user xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "timestamp" : "2026-08-30T05:56:48.540959900Z"
+  }, {
+    "role" : "assistant",
+    "content" : "round 6 assistant yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+    "timestamp" : "2026-08-30T05:56:48.540959900Z"
+  }, {
+    "role" : "user",
+    "content" : "round 7 user xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "timestamp" : "2026-08-30T05:56:48.540959900Z"
+  }, {
+    "role" : "assistant",
+    "content" : "round 7 assistant yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+    "timestamp" : "2026-08-30T05:56:48.540959900Z"
+  }, {
+    "role" : "user",
+    "content" : "round 8 user xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "timestamp" : "2026-08-30T05:56:48.540959900Z"
+  }, {
+    "role" : "assistant",
+    "content" : "round 8 assistant yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+    "timestamp" : "2026-08-30T05:56:48.540959900Z"
+  }, {
+    "role" : "user",
+    "content" : "round 9 user xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "timestamp" : "2026-08-30T05:56:48.551109300Z"
+  }, {
+    "role" : "assistant",
+    "content" : "round 9 assistant yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+    "timestamp" : "2026-08-30T05:56:48.551109300Z"
+  }, {
+    "role" : "user",
+    "content" : "round 0 user xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "timestamp" : "2026-08-30T05:56:48.551109300Z"
+  } ]
+}

@@ -3,9 +3,7 @@ package org.example.agent.core.impl;
 import lombok.extern.slf4j.Slf4j;
 import org.example.agent.context.budget.ContextAwareAgentBudgetFactory;
 import org.example.agent.context.builder.ContextBuilder;
-import org.example.agent.context.compression.AutoCompressionObserver;
 import org.example.agent.context.memory.LongTermMaintainer;
-import org.example.agent.context.memory.MemoryTurnHook;
 import org.example.agent.context.session.SessionMessageStore;
 import org.example.agent.core.budget.AgentBudget;
 import org.example.agent.core.event.AgentEvent;
@@ -77,12 +75,9 @@ public class AgentRuntimeImpl implements AgentRuntime {
     private final List<ReActLoopObserver> observers = new CopyOnWriteArrayList<>();
     private final ExecutorService blockingExecutor;
     private final ContextBuilder contextBuilder;
-    private final AutoCompressionObserver autoCompressionObserver;
     private final SessionMessageStore sessionStore;
     private final ContextAwareAgentBudgetFactory budgetFactory;
-    private final MemoryTurnHook memoryTurnHook;
     private final LongTermMaintainer longTermMaintainer;
-    private final org.example.agent.tool.cache.ToolResultStore resultStore;
     private final org.example.agent.tool.config.CliToolProperties cliToolProperties;
     private final org.example.agent.tool.spi.ToolDescriptorRegistry toolDescriptorRegistry;
     private final ExecutorService toolExecutor;
@@ -95,12 +90,9 @@ public class AgentRuntimeImpl implements AgentRuntime {
                             ObjectProvider<ToolCallbackProvider> toolCallbackProvider,
                             SideEffectTracker sideEffectTracker,
                             ContextBuilder contextBuilder,
-                            AutoCompressionObserver autoCompressionObserver,
                             SessionMessageStore sessionStore,
                             ContextAwareAgentBudgetFactory budgetFactory,
-                            MemoryTurnHook memoryTurnHook,
                             LongTermMaintainer longTermMaintainer,
-                            org.example.agent.tool.cache.ToolResultStore resultStore,
                             org.example.agent.tool.config.CliToolProperties cliToolProperties,
                             org.example.agent.tool.spi.ToolDescriptorRegistry toolDescriptorRegistry,
                             @org.springframework.beans.factory.annotation.Qualifier("toolExecutor")
@@ -108,27 +100,26 @@ public class AgentRuntimeImpl implements AgentRuntime {
                             IntentGate intentGate,
                             LlmToolGate toolGate) {
         this(chatModel, toolGateway, toolCallbackProvider, sideEffectTracker,
-                contextBuilder, autoCompressionObserver, sessionStore,
-                budgetFactory, memoryTurnHook, longTermMaintainer, resultStore,
+                contextBuilder, sessionStore,
+                budgetFactory, longTermMaintainer,
                 cliToolProperties, toolDescriptorRegistry, toolExecutor,
                 intentGate, toolGate, defaultBlockingExecutor());
     }
 
     /**
-     * 测试 / 旧装配入口 —— 不带记忆钩子;记忆相关操作全部走 null-safe noop。
+     * 测试 / 旧装配入口 —— 不带 LongTermMaintainer;长记忆相关操作全部走 null-safe noop。
      */
     public AgentRuntimeImpl(ChatModel chatModel,
                             ToolGateway toolGateway,
                             ObjectProvider<ToolCallbackProvider> toolCallbackProvider,
                             SideEffectTracker sideEffectTracker,
                             ContextBuilder contextBuilder,
-                            AutoCompressionObserver autoCompressionObserver,
                             SessionMessageStore sessionStore,
                             ContextAwareAgentBudgetFactory budgetFactory,
                             ExecutorService blockingExecutor) {
         this(chatModel, toolGateway, toolCallbackProvider, sideEffectTracker,
-                contextBuilder, autoCompressionObserver, sessionStore,
-                budgetFactory, null, null, null, null, null, null, null, null, blockingExecutor);
+                contextBuilder, sessionStore,
+                budgetFactory, null, null, null, null, null, null, blockingExecutor);
     }
 
     public AgentRuntimeImpl(ChatModel chatModel,
@@ -136,12 +127,9 @@ public class AgentRuntimeImpl implements AgentRuntime {
                             ObjectProvider<ToolCallbackProvider> toolCallbackProvider,
                             SideEffectTracker sideEffectTracker,
                             ContextBuilder contextBuilder,
-                            AutoCompressionObserver autoCompressionObserver,
                             SessionMessageStore sessionStore,
                             ContextAwareAgentBudgetFactory budgetFactory,
-                            MemoryTurnHook memoryTurnHook,
                             LongTermMaintainer longTermMaintainer,
-                            org.example.agent.tool.cache.ToolResultStore resultStore,
                             org.example.agent.tool.config.CliToolProperties cliToolProperties,
                             org.example.agent.tool.spi.ToolDescriptorRegistry toolDescriptorRegistry,
                             ExecutorService toolExecutor,
@@ -153,14 +141,11 @@ public class AgentRuntimeImpl implements AgentRuntime {
         this.toolCallbackProvider = toolCallbackProvider == null ? null : toolCallbackProvider.getIfAvailable();
         this.sideEffectTracker = sideEffectTracker;
         this.contextBuilder = contextBuilder;
-        this.autoCompressionObserver = autoCompressionObserver;
         this.sessionStore = sessionStore;
         this.budgetFactory = budgetFactory;
-        this.memoryTurnHook = memoryTurnHook;
         this.longTermMaintainer = longTermMaintainer;
         this.registry = new ExecutionRegistry();
         this.blockingExecutor = blockingExecutor;
-        this.resultStore = resultStore;
         this.cliToolProperties = cliToolProperties;
         this.toolDescriptorRegistry = toolDescriptorRegistry;
         this.toolExecutor = toolExecutor;
@@ -278,19 +263,15 @@ public class AgentRuntimeImpl implements AgentRuntime {
     }
 
     /**
-     * 每轮 mid-term 增量更新 + 标记当前 session 为 long-term 维护器的活动 session
+     * 每轮:标记当前 session 为 long-term 维护器的活动 session
      * （part4 §7.2 + 用户澄清 "long memo 提取异步进行"）。
      * 失败 swallow + log,不阻塞主流程。
+     *
+     * <p>mid-term 增量更新已删除（mid-term = 压缩后窗口的磁盘快照,
+     * 由 {@code ContextBuilder.syncCompressMessages} 在上下文溢出时原子写盘）。
      */
     private void postTurnMemory(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) return;
-        if (memoryTurnHook != null) {
-            try {
-                memoryTurnHook.onTurnFinished(sessionId);
-            } catch (RuntimeException ex) {
-                log.warn("memoryTurnHook failed for {}: {}", sessionId, ex.getMessage());
-            }
-        }
         if (longTermMaintainer != null) {
             try {
                 longTermMaintainer.setActiveSessionId(sessionId);
@@ -320,14 +301,11 @@ public class AgentRuntimeImpl implements AgentRuntime {
         chain.add(tokenObs);
         chain.add(stepObs);
         chain.add(timeoutObs);
-        if (autoCompressionObserver != null) {
-            chain.add(autoCompressionObserver);
-        }
 
         DefaultReActLoopSignal signal = new DefaultReActLoopSignal();
         ReActLoop loop = new ReActLoop(executionId, chatModel, task, budget, toolGateway,
                 currentToolCallbacks(), sideEffectTracker, contextBuilder,
-                cliToolProperties, toolDescriptorRegistry, toolExecutor, resultStore,
+                cliToolProperties, toolDescriptorRegistry, toolExecutor,
                 intentGate, toolGate);
         AgentExecutionRecord.Builder recordBuilder = AgentExecutionRecord.builder()
                 .executionId(executionId)

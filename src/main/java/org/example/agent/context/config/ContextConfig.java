@@ -3,7 +3,6 @@ package org.example.agent.context.config;
 import org.example.agent.context.budget.ContextBudgetPolicy;
 import org.example.agent.context.memory.LongTermStore;
 import org.example.agent.context.memory.MemoryIndex;
-import org.example.agent.context.memory.MidTermStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -54,10 +53,5 @@ public class ContextConfig {
     public MemoryIndex memoryIndex() {
         String root = System.getProperty("agent.project-root", "");
         return new MemoryIndex(root);
-    }
-
-    @Bean
-    public MidTermStore midTermStore() {
-        return new MidTermStore();
     }
 }

@@ -14,7 +14,6 @@ import org.example.agent.context.layer.StaticLayer;
 import org.example.agent.context.memory.LongTermStore;
 import org.example.agent.context.memory.MemoryIndex;
 import org.example.agent.context.memory.MemoryRecallScorer;
-import org.example.agent.context.memory.MidTermStore;
 import org.example.agent.context.session.SessionMessageStore;
 import org.example.agent.core.task.AgentTask;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -52,7 +51,6 @@ public class ContextBuilder {
     private final ConversationCompressor compressor;
     private final StaticLayer staticLayer;
     private final DynamicLayer dynamicLayer;
-    private final MidTermStore midTermStore;
     private final LongTermStore longTermStore;
     private final MemoryIndex memoryIndex;
     private final MemoryRecallScorer recallScorer;
@@ -64,12 +62,11 @@ public class ContextBuilder {
                           ConversationCompressor compressor,
                           StaticLayer staticLayer,
                           DynamicLayer dynamicLayer,
-                          MidTermStore midTermStore,
                           LongTermStore longTermStore,
                           MemoryIndex memoryIndex,
                           TaskPlanContextAssembler taskPlanAssembler) {
         this(policy, sessionStore, compressor, staticLayer, dynamicLayer,
-                midTermStore, longTermStore, memoryIndex, null, taskPlanAssembler);
+                longTermStore, memoryIndex, null, taskPlanAssembler);
     }
 
     public ContextBuilder(ContextBudgetPolicy policy,
@@ -77,7 +74,6 @@ public class ContextBuilder {
                           ConversationCompressor compressor,
                           StaticLayer staticLayer,
                           DynamicLayer dynamicLayer,
-                          MidTermStore midTermStore,
                           LongTermStore longTermStore,
                           MemoryIndex memoryIndex,
                           MemoryRecallScorer recallScorer,
@@ -87,7 +83,6 @@ public class ContextBuilder {
         this.compressor = compressor == null ? new ConversationCompressor() : compressor;
         this.staticLayer = staticLayer == null ? new StaticLayer() : staticLayer;
         this.dynamicLayer = dynamicLayer == null ? new DynamicLayer() : dynamicLayer;
-        this.midTermStore = midTermStore;
         this.longTermStore = longTermStore;
         this.memoryIndex = memoryIndex;
         this.recallScorer = recallScorer;
@@ -100,7 +95,7 @@ public class ContextBuilder {
                                           ConversationCompressor compressor) {
         return new ContextBuilder(policy, sessionStore, compressor,
                 new StaticLayer(), new DynamicLayer(),
-                new MidTermStore(), new LongTermStore(), new MemoryIndex(),
+                new LongTermStore(), new MemoryIndex(),
                 null, null);
     }
 
@@ -202,12 +197,17 @@ public class ContextBuilder {
                     ex.getUsed(), ex.getReserved());
             throw ex;
         }
-        session.replaceAll(compressed);
-        String summaryText = compressed.isEmpty() ? ""
-                : SessionMessageStore.extractText(compressed.get(0));
-        session.markCompressed(summaryText);
-        long afterUsed = sessionStore.estimateUsedTokens(task.getSessionId());
-        session.recordAutoCompression(beforeUsed, afterUsed);
+        long afterUsed = SessionMessageStore.estimateMessagesTokens(compressed);
+
+        // 写盘顺序契约:先 worklog 元事件(短期),再 replaceWindow(原子写 mid-term)
+        String summaryNote = String.format("(target\u2264%d, budget=%d, window=%d)",
+                (long) (policy.getContextWindowMax() * policy.getCompressionThreshold()),
+                messagesBudget, policy.getContextWindowMax());
+        sessionStore.addMeta(task.getSessionId(),
+                SessionMessageStore.CompressionInfo.auto(beforeUsed, afterUsed, compressed.size() / 2)
+                        .toLine().replace("[auto-compress] ", "") + " " + summaryNote);
+        sessionStore.replaceWindow(task.getSessionId(), compressed,
+                SessionMessageStore.CompressionInfo.auto(beforeUsed, afterUsed, compressed.size() / 2));
 
         // 仅重载 messages 层(mid_term / long_term / memory_index / ephemeral / task_plan
         // 在 loadDynamicLayer 已就位,它们用各自的 quota 截断,不参与自动压缩)。
@@ -338,10 +338,9 @@ public class ContextBuilder {
             dynamicLayer.put(ContextKey.MESSAGES, ContextEntry.empty(ContextKey.MESSAGES));
         }
 
-        // 2. mid_term —— 当前 session 始终注入（4 字段 JSON 形态）
-        if (midTermStore != null) {
-            MidTermStore.MidTerm mt = midTermStore.loadOrEmpty(task.getSessionId());
-            String text = mt == null ? "" : mt.toCompactText();
+        // 2. mid_term —— 当前 session 压缩后窗口（含首行 [meta] 压缩信息 + 消息列表）
+        if (sessionStore != null) {
+            String text = sessionStore.renderMidTermForContext(task.getSessionId());
             if (ContextBudgetPolicy.estimateTextTokens(text) > policy.getMidTermQuota()) {
                 text = truncate(text, policy.getMidTermQuota());
             }

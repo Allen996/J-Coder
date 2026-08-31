@@ -30,11 +30,14 @@ public class MemoryPromptRegistry {
 
     public static final String PROMPTS_DIR = "prompts/memory";
 
-    /** 7 个 profile 文件名（与 §7.6 表对齐）。 */
+    /**
+     * profile 文件名清单。
+     *
+     * <p>mid-term patch / mid-term regen 已删除（mid-term 在 part4 §7.x 重设计后只服务
+     * 当前 session 的窗口快照，不再由 LLM 摘要）。
+     */
     public static final List<String> PROFILES = List.of(
             "short_term_compress",
-            "mid_term_patch",
-            "mid_term_regen",
             "long_term_extract",
             "long_term_topic_naming",
             "index_summary",

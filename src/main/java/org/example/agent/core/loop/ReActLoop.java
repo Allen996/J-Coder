@@ -13,7 +13,6 @@ import org.example.agent.intent.IntentGate;
 import org.example.agent.intent.L2ToolGateResult;
 import org.example.agent.intent.LlmToolGate;
 import org.example.agent.intent.ToolGateDecision;
-import org.example.agent.tool.cache.ToolResultStore;
 import org.example.agent.tool.config.CliToolProperties;
 import org.example.agent.tool.gateway.ToolGateway;
 import org.example.agent.tool.rollback.SideEffectTracker;
@@ -77,9 +76,6 @@ public class ReActLoop {
     /** 兜底：单次执行最多调模型 16 次，防止 tool_call 互相调用导致的无限循环。 */
     private static final int MAX_MODEL_ITERATIONS = 16;
 
-    /** auto-inline 时扫描最近 N 条消息。3 轮 ≈ user + assistant + tool_response × 3。 */
-    private static final int AUTO_INLINE_SCAN_WINDOW = 6;
-
     private final String executionId;
     private final ChatModel chatModel;
     private final AgentTask task;
@@ -92,7 +88,6 @@ public class ReActLoop {
     private final CliToolProperties properties;
     private final ToolDescriptorRegistry descriptorRegistry;
     private final ExecutorService toolExecutor;
-    private final ToolResultStore resultStore;
     private final IntentGate intentGate;
     private final LlmToolGate toolGate;
     /** L1 入口产出,loop 期间持续可读。null 表示已禁用。 */
@@ -107,7 +102,7 @@ public class ReActLoop {
                      List<ToolCallback> toolCallbacks,
                      SideEffectTracker sideEffects) {
         this(executionId, chatModel, task, budget, toolGateway, toolCallbacks, sideEffects,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null);
     }
 
     /** 兼容入口:带 ContextBuilder 但无增强依赖。 */
@@ -120,7 +115,7 @@ public class ReActLoop {
                      SideEffectTracker sideEffects,
                      ContextBuilder contextBuilder) {
         this(executionId, chatModel, task, budget, toolGateway, toolCallbacks, sideEffects,
-                contextBuilder, null, null, null, null, null, null);
+                contextBuilder, null, null, null, null, null);
     }
 
     /** 完整构造器。Spring 生产路径走这里。 */
@@ -134,11 +129,9 @@ public class ReActLoop {
                      ContextBuilder contextBuilder,
                      CliToolProperties properties,
                      ToolDescriptorRegistry descriptorRegistry,
-                     ExecutorService toolExecutor,
-                     ToolResultStore resultStore) {
+                     ExecutorService toolExecutor) {
         this(executionId, chatModel, task, budget, toolGateway, toolCallbacks, sideEffects,
-                contextBuilder, properties, descriptorRegistry, toolExecutor, resultStore,
-                null, null);
+                contextBuilder, properties, descriptorRegistry, toolExecutor, null, null);
     }
 
     /** 完整构造器(带意图层)。生产 + 意图启用时走这里。 */
@@ -153,7 +146,6 @@ public class ReActLoop {
                      CliToolProperties properties,
                      ToolDescriptorRegistry descriptorRegistry,
                      ExecutorService toolExecutor,
-                     ToolResultStore resultStore,
                      IntentGate intentGate,
                      LlmToolGate toolGate) {
         this.executionId = executionId;
@@ -168,7 +160,6 @@ public class ReActLoop {
         this.properties = properties;
         this.descriptorRegistry = descriptorRegistry;
         this.toolExecutor = toolExecutor;
-        this.resultStore = resultStore;
         this.intentGate = intentGate;
         this.toolGate = toolGate;
         log.info("executionId={} ReActLoop initialized with {} tool callbacks: {}",
@@ -233,8 +224,7 @@ public class ReActLoop {
                 int promptStep = stepCounter.get() + 1;
                 emitPromptBuilt(observers, messages, promptStep, signal);
 
-                // Auto-inline:扫描最近消息里的 #<id> 占位符,尝试从外置存储召回并嵌入
-                autoInlinePlaceholders(messages);
+                // 阶段 5:auto-inline 删除 —— 工具结果不再外置占位符,完整结果已写 short-term.json
 
                 Prompt prompt = buildPrompt(messages);
                 ChatResponse response = chatModel.call(prompt);
@@ -457,52 +447,8 @@ public class ReActLoop {
                 + "\nargs: " + (tc.arguments() == null ? "{}" : tc.arguments());
     }
 
-    /**
-     * 扫描 messages 末尾 N 条 user/assistant 文本中的 {@code #<id>} 占位符,
-     * 尝试从外置存储召回并 inline,直到预算耗尽。
-     * 预算耗尽后剩余 id 改 inline 元数据提示。
-     *
-     * <p>变更通过追加一个 SystemMessage 体现(沿用 ConversationCompressor 的同模式)。
-     */
-    private void autoInlinePlaceholders(List<Message> messages) {
-        if (properties == null || resultStore == null) return;
-        if (!properties.resultCache().enabled()) return;
-        int budget = properties.resultCache().autoInlineByteBudget();
-        if (budget <= 0) return;
-
-        int scanFrom = Math.max(0, messages.size() - AUTO_INLINE_SCAN_WINDOW);
-        StringBuilder scanned = new StringBuilder();
-        for (int i = scanFrom; i < messages.size(); i++) {
-            Message m = messages.get(i);
-            if (m instanceof UserMessage um && um.getText() != null) {
-                scanned.append(um.getText()).append('\n');
-            } else if (m instanceof AssistantMessage am && am.getText() != null) {
-                scanned.append(am.getText()).append('\n');
-            }
-        }
-        List<String> ids = resultStore.scanIds(scanned.toString());
-        if (ids.isEmpty()) return;
-
-        List<String> inlined = new ArrayList<>();
-        int used = 0;
-        for (String id : ids) {
-            ToolResultStore.RecallResult rec = resultStore.recall(id, null, null, null);
-            if (rec instanceof ToolResultStore.RecallResult.Ok ok) {
-                int size = ok.content() == null ? 0 : ok.content().length();
-                if (used + size <= budget) {
-                    inlined.add("#" + id + ":\n" + ok.content());
-                    used += size;
-                } else {
-                    inlined.add(resultStore.metadataHint(id));
-                }
-            } else {
-                // EXPIRED / STALE_REMOVED / NOT_FOUND / INVALID —— 跳过,不要污染 prompt
-                log.debug("autoInline skip id={} reason={}", id, rec.getClass().getSimpleName());
-            }
-        }
-        if (inlined.isEmpty()) return;
-        messages.add(new SystemMessage("[auto-recalled tool results]\n" + String.join("\n\n", inlined)));
-    }
+    // 阶段 5:autoInlinePlaceholders 删除 —— 工具结果不再外置占位符(#<id>)。
+    // 完整结果已通过 SessionMessageStore 写入 short-term.json,无需再次 inline。
 
     // ============== 内部 ==============
 

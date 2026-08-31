@@ -33,9 +33,10 @@ import java.util.regex.Pattern;
  *   <li>允许结果为空</li>
  * </ol>
  *
- * <p>召回池：长期记忆主题文件（按主题为单元）+ 非当前 session 的 mid-term；
- * 当前 session 的 mid-term 由 {@link MidTermStore} 直接注入；pinned / importance=5 的条目由
- * {@link #loadPinnedEntries()} 返回展开。
+ * <p><b>召回池</b>：本版本仅包含长期记忆主题文件（按主题为单元）。
+ * mid-term 跨 session 共享已在 part4 §7.x 删除（mid-term 仅服务当前 session，
+ * 由 {@code SessionMessageStore} 持久化并由 {@code ContextBuilder} 直接注入）。
+ * pinned / importance=5 的条目由 {@link #loadPinnedEntries()} 返回展开。
  *
  * <p>查询为空（自动步骤） → 仅返回 pinned / importance=5 的常驻条目，不参与评分。
  */
@@ -46,7 +47,6 @@ public class MemoryRecallScorer {
             Pattern.compile("(?<=[a-z0-9])(?=[A-Z])|[_\\-]+");
 
     private final LongTermStore longTermStore;
-    private final MidTermStore midTermStore;
 
     private final double threshold;
     private final int topN;
@@ -58,16 +58,14 @@ public class MemoryRecallScorer {
     private final double weightType;
 
     public MemoryRecallScorer(LongTermStore longTermStore,
-                              MidTermStore midTermStore,
-                              @Value("${agent.memory.recall.threshold:0.35}") double threshold,
-                              @Value("${agent.memory.recall.top-n:5}") int topN,
-                              @Value("${agent.memory.recall.half-life-days:14}") double halfLifeDays,
-                              @Value("${agent.memory.recall.weights.lexical:0.45}") double wLexical,
-                              @Value("${agent.memory.recall.weights.importance:0.20}") double wImportance,
-                              @Value("${agent.memory.recall.weights.recency:0.20}") double wRecency,
-                              @Value("${agent.memory.recall.weights.type:0.15}") double wType) {
+                               @Value("${agent.memory.recall.threshold:0.35}") double threshold,
+                               @Value("${agent.memory.recall.top-n:5}") int topN,
+                               @Value("${agent.memory.recall.half-life-days:14}") double halfLifeDays,
+                               @Value("${agent.memory.recall.weights.lexical:0.45}") double wLexical,
+                               @Value("${agent.memory.recall.weights.importance:0.20}") double wImportance,
+                               @Value("${agent.memory.recall.weights.recency:0.20}") double wRecency,
+                               @Value("${agent.memory.recall.weights.type:0.15}") double wType) {
         this.longTermStore = longTermStore;
-        this.midTermStore = midTermStore;
         this.threshold = threshold;
         this.topN = Math.max(1, topN);
         this.halfLifeDays = halfLifeDays;
@@ -83,14 +81,13 @@ public class MemoryRecallScorer {
         private final String title;
         private final String summary;
         private final String path;
-        private final String type;     // "topic" / "session"
+        private final String type;     // "topic"
         private final double score;
         private final boolean pinned;
-        private final List<LongTermStore.Entry> entries;   // topic 才有
-        private final MidTermStore.MidTerm midTerm;       // session 才有
+        private final List<LongTermStore.Entry> entries;
 
         public Scored(String title, String summary, String path, String type, double score,
-                      boolean pinned, List<LongTermStore.Entry> entries, MidTermStore.MidTerm midTerm) {
+                      boolean pinned, List<LongTermStore.Entry> entries) {
             this.title = title == null ? "" : title;
             this.summary = summary == null ? "" : summary;
             this.path = path == null ? "" : path;
@@ -98,7 +95,6 @@ public class MemoryRecallScorer {
             this.score = score;
             this.pinned = pinned;
             this.entries = entries == null ? new ArrayList<>() : entries;
-            this.midTerm = midTerm;
         }
     }
 
@@ -106,7 +102,7 @@ public class MemoryRecallScorer {
      * 主入口：评分召回。
      *
      * @param query 用户当前输入（可空 —— 为空时仅返回常驻条目）
-     * @param currentSessionId 当前 session（其 mid-term 不参与评分；始终单独注入）
+     * @param currentSessionId 当前 session（保留用于未来扩展，目前不影响召回）
      */
     public List<Scored> score(String query, String currentSessionId) {
         List<Scored> pinned = loadPinnedEntries();
@@ -126,18 +122,7 @@ public class MemoryRecallScorer {
                 double score = scoreTopic(t, queryTerms);
                 if (score <= 0) continue;
                 scored.add(new Scored(t.getSlug(), t.getSummary(), t.filename(),
-                        "topic", score, false, t.getEntries(), null));
-            }
-        }
-
-        // 非当前 session 的 mid-term
-        if (midTermStore != null) {
-            for (MidTermStore.MidTerm mt : loadAllMidTerms(currentSessionId)) {
-                double score = scoreMidTerm(mt, queryTerms);
-                if (score <= 0) continue;
-                scored.add(new Scored(mt.getSessionId(), mt.getSummary(),
-                        ".agent/sessions/" + mt.getSessionId() + "/mid-term.json",
-                        "session", score, false, new ArrayList<>(), mt));
+                        "topic", score, false, t.getEntries()));
             }
         }
 
@@ -164,7 +149,7 @@ public class MemoryRecallScorer {
             for (LongTermStore.Topic t : longTermStore.loadTopics()) {
                 if (!t.isPinned() && t.getImportance() < 5) continue;
                 pinned.add(new Scored(t.getSlug(), t.getSummary(), t.filename(),
-                        "topic", 1.0, true, t.getEntries(), null));
+                        "topic", 1.0, true, t.getEntries()));
             }
         }
         return pinned;
@@ -221,22 +206,6 @@ public class MemoryRecallScorer {
         return weightLexical * lex + weightImportance * imp + weightRecency * rec + weightType * typ;
     }
 
-    double scoreMidTerm(MidTermStore.MidTerm mt, List<String> queryTerms) {
-        StringBuilder hay = new StringBuilder();
-        hay.append(mt.getSummary()).append(' ');
-        for (String s : mt.getTopics()) hay.append(s).append(' ');
-        for (String s : mt.getKeywords()) hay.append(s).append(' ');
-        hay.append(mt.getSessionSummary()).append(' ');
-        for (String s : mt.getUserFocus()) hay.append(s).append(' ');
-        for (String s : mt.getContextualRules()) hay.append(s).append(' ');
-        double lex = lexical(queryTerms, hay.toString());
-        if (lex <= 0) return 0;
-        double imp = (mt.getImportance() == 0 ? 3 : mt.getImportance()) / 5.0;
-        double rec = recency(mt.getUpdatedAt());
-        double typ = typeWeight("session");
-        return weightLexical * lex + weightImportance * imp + weightRecency * rec + weightType * typ;
-    }
-
     static double lexical(List<String> queryTerms, String haystack) {
         if (queryTerms == null || queryTerms.isEmpty()) return 0;
         List<String> docTerms = tokenize(haystack);
@@ -251,7 +220,7 @@ public class MemoryRecallScorer {
             maxPossible += qWeight;
             int dCount = df.getOrDefault(term, 0);
             if (dCount > 0) {
-                double idf = 1.0 + Math.log(1.0 + dCount);
+                double idf = 1.0 + Math.log(1 + dCount);
                 score += qWeight * Math.min(1.0, dCount / 3.0) * idf;
             }
         }
@@ -275,7 +244,6 @@ public class MemoryRecallScorer {
             case "project" -> 0.9;
             case "reference" -> 0.7;
             case "user" -> 0.7;
-            case "session" -> 0.5;
             default -> 0.5;
         };
     }
@@ -326,50 +294,6 @@ public class MemoryRecallScorer {
             m.merge(t, 1, Integer::sum);
         }
         return m;
-    }
-
-    private List<MidTermStore.MidTerm> loadAllMidTerms(String currentSessionId) {
-        // 由 Spring 在装配时通过专用方法加载（此处只暴露接口）；具体遍历由调用方提供。
-        // 默认实现：从 longTermStore 拿不到 mid-term，由 ContextBuilder 单独注入 current session 的 mid-term。
-        // 非当前 session 的 mid-term 由外部调用方（如 MemoryRecallAssembly）注入。
-        return new ArrayList<>();
-    }
-
-    /** 给 ContextBuilder 注入其他 session 的 mid-term。 */
-    public List<Scored> scoreWithExtraMidTerms(String query,
-                                               String currentSessionId,
-                                               List<MidTermStore.MidTerm> extraMidTerms) {
-        List<Scored> base = score(query, currentSessionId);
-        if (extraMidTerms == null || extraMidTerms.isEmpty()) return base;
-        if (query == null || query.isBlank()) return base;
-        List<String> queryTerms = tokenize(query);
-        if (queryTerms.isEmpty()) return base;
-
-        List<Scored> extra = new ArrayList<>(base);
-        for (MidTermStore.MidTerm mt : extraMidTerms) {
-            if (currentSessionId != null && currentSessionId.equals(mt.getSessionId())) continue;
-            double s = scoreMidTerm(mt, queryTerms);
-            if (s <= 0 || s < threshold) continue;
-            extra.add(new Scored(mt.getSessionId(), mt.getSummary(),
-                    ".agent/sessions/" + mt.getSessionId() + "/mid-term.json",
-                    "session", s, false, new ArrayList<>(), mt));
-        }
-        extra.sort((a, b) -> {
-            if (a.isPinned() != b.isPinned()) return a.isPinned() ? -1 : 1;
-            return Double.compare(b.getScore(), a.getScore());
-        });
-        // 应用 topN 截断到非 pinned
-        List<Scored> pinnedOnly = new ArrayList<>();
-        List<Scored> recalled = new ArrayList<>();
-        for (Scored s : extra) {
-            if (s.isPinned()) pinnedOnly.add(s);
-            else recalled.add(s);
-        }
-        if (recalled.size() > topN) recalled = recalled.subList(0, topN);
-        List<Scored> out = new ArrayList<>();
-        out.addAll(pinnedOnly);
-        out.addAll(recalled);
-        return out;
     }
 
     private static String formatScore(double d) {

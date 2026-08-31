@@ -23,7 +23,6 @@ class MemoryPackageWiringTest {
     @Autowired(required = false) FlashMemorySummarizer summarizer;
     @Autowired(required = false) PendingLongTermCandidates pending;
     @Autowired(required = false) LongTermMaintainer maintainer;
-    @Autowired(required = false) MemoryTurnHook turnHook;
     @Autowired(required = false) MemoryIndexSynchronizer indexSync;
     @Autowired(required = false) org.springframework.ai.chat.model.ChatModel memoryChatModel;
 
@@ -32,7 +31,6 @@ class MemoryPackageWiringTest {
         // 核心组件都应被 Spring 装配出来(可以 null,仅 LLM bean 在缺 API key 时为 null)
         assertThat(pending).isNotNull();
         assertThat(maintainer).isNotNull();
-        assertThat(turnHook).isNotNull();
         assertThat(indexSync).isNotNull();
         assertThat(summarizer).isNotNull();
         // Summarizer 是 NullChatModel 时仍工作

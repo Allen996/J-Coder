@@ -3,8 +3,6 @@ package org.example.agent.context.memory;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.example.agent.context.session.SessionMessageStore;
-import org.example.agent.core.task.persistence.TaskPlanRepository;
-import org.example.agent.core.task.TaskPlanStatus;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
@@ -18,11 +16,13 @@ import java.nio.file.Path;
  *
  * <p>新版文件路径（part4 §7.8）：
  * <ul>
- *   <li>{@code .agent/sessions/{id}/short-term.json} → "session {id} 短期对话流"</li>
- *   <li>{@code .agent/sessions/{id}/mid-term.json}   → "session {id} 中期摘要"</li>
+ *   <li>{@code .agent/sessions/{id}/short-term.json} → "session {id} 短期对话流 + worklog"</li>
+ *   <li>{@code .agent/sessions/{id}/mid-term.json}   → "session {id} 中期窗口快照"</li>
  *   <li>{@code {projectRoot}/NNN-<topic>.md}        → "topic 摘要"（长期记忆按主题拆分）</li>
- *   <li>{@code .agent/tasks/{planId}/plan.json}     → "plan {planId} 任务计划"（part5 §8.5）</li>
+ *   <li>{@code .agent/sessions/{id}/plan.json + dag-state.json}（阶段 2 起,不再走 MEMORY.md 索引）</li>
  * </ul>
+ *
+ * <p>阶段 2 起,plan 不再写 MEMORY.md 索引 —— DagStateRepository 按 sessionId 自动定位。
  */
 @Slf4j
 @Component
@@ -30,21 +30,15 @@ public class MemoryIndexSynchronizer {
 
     private final MemoryIndex memoryIndex;
     private final LongTermStore longTermStore;
-    private final MidTermStore midTermStore;
     private final SessionMessageStore sessionStore;
-    private final TaskPlanRepository taskPlanRepository;
     private final String projectRoot;
 
     public MemoryIndexSynchronizer(MemoryIndex memoryIndex,
                                    LongTermStore longTermStore,
-                                   MidTermStore midTermStore,
-                                   SessionMessageStore sessionStore,
-                                   TaskPlanRepository taskPlanRepository) {
+                                   SessionMessageStore sessionStore) {
         this.memoryIndex = memoryIndex;
         this.longTermStore = longTermStore;
-        this.midTermStore = midTermStore;
         this.sessionStore = sessionStore;
-        this.taskPlanRepository = taskPlanRepository;
         this.projectRoot = "";
     }
 
@@ -55,8 +49,11 @@ public class MemoryIndexSynchronizer {
             // 扫描磁盘上已有的 mid-term / short-term
             Path sessionsRoot;
             if (projectRoot.isBlank()) {
-                Path probe = midTermStore.pathFor("__probe__");
-                sessionsRoot = probe == null ? null : probe.getParent().getParent();
+                if (sessionStore != null) {
+                    sessionsRoot = sessionStore.sessionsRoot();
+                } else {
+                    sessionsRoot = null;
+                }
             } else {
                 sessionsRoot = java.nio.file.Paths.get(projectRoot, ".agent", "sessions");
             }
@@ -73,41 +70,19 @@ public class MemoryIndexSynchronizer {
                     });
                 }
             }
-            // 扫描磁盘上已有的 task plan（part5 §8.5）
-            scanAndNoteExistingPlans();
         } catch (Exception ex) {
             log.warn("MemoryIndexSynchronizer.syncKnownPaths failed: {}", ex.getMessage());
         }
     }
 
-    private void scanAndNoteExistingPlans() {
-        Path tasksRoot = taskPlanRepository.tasksRoot();
-        if (tasksRoot == null || !Files.exists(tasksRoot)) return;
-        try (var stream = Files.list(tasksRoot)) {
-            stream.filter(Files::isDirectory).forEach(dir -> {
-                String planId = dir.getFileName().toString();
-                Path planFile = dir.resolve("plan.json");
-                if (Files.exists(planFile)) {
-                    taskPlanRepository.loadPlan(planId).ifPresent(plan -> {
-                        if (plan.getStatus() == TaskPlanStatus.ACTIVE) {
-                            notePlan(planId);
-                        }
-                    });
-                }
-            });
-        } catch (Exception ex) {
-            log.warn("scanAndNoteExistingPlans failed: {}", ex.getMessage());
-        }
-    }
-
     public void noteShortTermSession(String sessionId) {
         String rel = relativeSessionPath(sessionId, "short-term.json");
-        memoryIndex.add(rel, "session " + sessionId + " 短期对话流");
+        memoryIndex.add(rel, "session " + sessionId + " 短期对话流 + worklog");
     }
 
     public void noteMidTermSession(String sessionId) {
         String rel = relativeSessionPath(sessionId, "mid-term.json");
-        memoryIndex.add(rel, "session " + sessionId + " 中期摘要");
+        memoryIndex.add(rel, "session " + sessionId + " 中期窗口快照");
     }
 
     /** 扫描项目根目录下的所有 NNN-*.md 长期记忆文件并加入索引。 */
@@ -117,23 +92,6 @@ public class MemoryIndexSynchronizer {
             String filename = t.filename();
             memoryIndex.add(filename, t.getSummary().isEmpty() ? "长期记忆 " + t.getSlug() : t.getSummary());
         }
-    }
-
-    /** 把 plan.json 路径加入 MEMORY.md。 */
-    public void notePlan(String planId) {
-        if (planId == null || planId.isBlank()) return;
-        String rel = relativePlanPath(planId);
-        memoryIndex.add(rel, "plan " + planId + " 任务计划");
-    }
-
-    /** 从 MEMORY.md 移除 plan 条目。 */
-    public void removePlan(String planId) {
-        if (planId == null || planId.isBlank()) return;
-        memoryIndex.remove(relativePlanPath(planId));
-    }
-
-    private String relativePlanPath(String planId) {
-        return ".agent/tasks/" + planId + "/plan.json";
     }
 
     private String relativeSessionPath(String sessionId, String fileName) {

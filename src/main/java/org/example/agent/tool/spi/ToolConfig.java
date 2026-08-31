@@ -1,6 +1,5 @@
 package org.example.agent.tool.spi;
 
-import org.example.agent.tool.cache.RecallToolResult;
 import org.example.agent.tool.config.CliToolProperties;
 import org.example.agent.tool.file.FileTools;
 import org.example.agent.tool.git.GitTools;
@@ -26,8 +25,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * bean 时，{@code List<ToolCallback>} 注入到 runtime 是空集合 —— 模型拿不到工具定义，
  * 就会"幻觉"调工具（自己编一个工具名 + 假结果）。
  *
- * <p>v1 直接列出 5 个工具类(含 {@link RecallToolResult})。v2 改成按包扫描
- * {@code org.example.agent.tool.*Tools},自动收集所有以 {@code Tools} 结尾的 bean。
+ * <p>阶段 5:删除 RecallToolResult —— 工具结果不再外置占位符,走 short-term 全量记录。
  */
 @Configuration
 public class ToolConfig {
@@ -36,10 +34,9 @@ public class ToolConfig {
     public ToolCallbackProvider toolCallbackProvider(FileTools fileTools,
                                                     GrepTools grepTools,
                                                     GitTools gitTools,
-                                                    ShellTools shellTools,
-                                                    RecallToolResult recallToolResult) {
+                                                    ShellTools shellTools) {
         return MethodToolCallbackProvider.builder()
-                .toolObjects(fileTools, grepTools, gitTools, shellTools, recallToolResult)
+                .toolObjects(fileTools, grepTools, gitTools, shellTools)
                 .build();
     }
 

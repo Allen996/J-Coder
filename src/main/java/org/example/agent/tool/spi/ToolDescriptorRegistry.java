@@ -75,10 +75,35 @@ public class ToolDescriptorRegistry {
                 "查看某次提交 / 引用对应的内容。")
                 .withTimeout(15_000L));
 
-        // ===== Cache =====
-        m.put("recall_tool_result", ToolDescriptor.lowNonCacheable("recall_tool_result",
-                "召回外置的工具结果。默认全量;可用 startLine/endLine 取行范围,或 pattern 正则过滤。")
-                .withTimeout(5_000L));
+        // ===== Task Plan (主 Agent 专属,SubAgent 拿不到) =====
+        // TaskPlanTools 现有 7 个工具 + 阶段 1 新增 5 个工具
+        // 注意:这里登记只是为了让 SpringAiReactAgentProvider 能识别 mainAgentOnly 标记,
+        // 并非给 ToolGateway 用（TaskGateway 不调这些主 Agent 工具）。
+        m.put("create_plan", ToolDescriptor.lowMainOnly("create_plan",
+                "创建一个 TaskPlan 来拆解复杂任务。"));
+        m.put("start_subtask", ToolDescriptor.lowMainOnly("start_subtask",
+                "把指定 SubTask 标记为 IN_PROGRESS。"));
+        m.put("complete_subtask", ToolDescriptor.lowMainOnly("complete_subtask",
+                "标记当前 SubTask 完成（IN_PROGRESS → COMPLETED）。"));
+        m.put("fail_subtask", ToolDescriptor.lowMainOnly("fail_subtask",
+                "显式放弃当前 SubTask（IN_PROGRESS → FAILED）。"));
+        m.put("query_plan", ToolDescriptor.lowMainOnly("query_plan",
+                "查询当前 plan 的完整状态。"));
+        m.put("skip_subtask", ToolDescriptor.lowMainOnly("skip_subtask",
+                "跳过指定 SubTask 并链式 SKIP 其下游。"));
+        m.put("save_checkpoint", ToolDescriptor.lowMainOnly("save_checkpoint",
+                "在当前 SubTask 上打一个 checkpoint。"));
+        // 阶段 1 新增 5 个工具
+        m.put("dispatch_subtask", ToolDescriptor.lowMainOnly("dispatch_subtask",
+                "派发一个子 Agent 跑指定任务,主 loop 将在下一轮推理前 await。"));
+        m.put("append_subtask", ToolDescriptor.lowMainOnly("append_subtask",
+                "向 DAG 追加一个新节点（不立即执行）。"));
+        m.put("create_plan_v2", ToolDescriptor.lowMainOnly("create_plan_v2",
+                "（阶段 2 启用）创建初始 DAG。"));
+        m.put("checkpoint_now", ToolDescriptor.lowMainOnly("checkpoint_now",
+                "（阶段 4 启用）触发完整状态快照,等待用户决策。"));
+        m.put("inspect_subagent", ToolDescriptor.lowMainOnly("inspect_subagent",
+                "（阶段 3 启用）读取 SubAgent session 的 mid-term 或工具调用列表。"));
 
         this.byName = Collections.unmodifiableMap(m);
     }

@@ -2,7 +2,6 @@ package org.example.agent.tool.gateway;
 
 import org.example.agent.core.observer.ReActLoopObserver;
 import org.example.agent.core.signal.ReActLoopSignal;
-import org.example.agent.tool.cache.ToolResultStore;
 import org.example.agent.tool.config.CliToolProperties;
 import org.example.agent.tool.failure.FailureClassifier;
 import org.example.agent.tool.failure.RetryPolicy;
@@ -32,14 +31,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ToolGatewayTimeoutTest {
 
     private ExecutorService pool;
-    private ToolResultStore noopStore;
     private SideEffectTracker noopTracker;
     private ReActLoopSignal noopSignal;
 
     @BeforeEach
     void setUp() {
         pool = Executors.newSingleThreadExecutor();
-        noopStore = new NoopStore();
         noopTracker = new NoopTracker();
         noopSignal = new NoopSignal();
     }
@@ -66,7 +63,7 @@ class ToolGatewayTimeoutTest {
     }
 
     @Test
-    @DisplayName("工具回调在 timeoutMs 内完成 → 正常返回 + 末尾追加 [stored as #<id>]")
+    @DisplayName("工具回调在 timeoutMs 内完成 → 正常返回(阶段 5:不再追加 stored as #<id>)")
     void fastCallSucceedsAndStores() {
         AtomicInteger attempts = new AtomicInteger();
         ToolCallback fast = new FastCallback("fast_tool", attempts, "fast-result");
@@ -77,11 +74,11 @@ class ToolGatewayTimeoutTest {
         String result = gw.invoke("exec-1", "fast_tool", "{}", 1, noopSignal, List.of());
         assertEquals(1, attempts.get());
         assertTrue(result.startsWith("fast-result"), "结果前缀; actual=" + result);
-        assertTrue(result.contains("[stored as #"), "成功调用应触发外置缓存; actual=" + result);
+        // 阶段 5:不再追加 [stored as #<id>],完整结果已写入 short-term.json
     }
 
     @Test
-    @DisplayName("descriptor.cacheable=false 的工具不写存储")
+    @DisplayName("descriptor.cacheable=false 的工具也直接返回结果")
     void nonCacheableToolSkipsStorage() {
         AtomicInteger attempts = new AtomicInteger();
         ToolCallback nc = new FastCallback("nc_tool", attempts, "ok");
@@ -104,7 +101,6 @@ class ToolGatewayTimeoutTest {
                 new RetryPolicy(),
                 noopTracker,
                 new CliToolProperties(),
-                noopStore,
                 pool,
                 ToolGateway.AllowAllAuthorizationGate.INSTANCE);
     }
@@ -169,14 +165,7 @@ class ToolGatewayTimeoutTest {
         }
     }
 
-    static class NoopStore implements ToolResultStore {
-        @Override public String save(String t, Map<String, Object> a, String r, String e, ToolDescriptor d) { return "abcdef12"; }
-        @Override public RecallResult recall(String id, Integer s, Integer ed, String p) { return new RecallResult.Ok(""); }
-        @Override public void invalidateByPath(java.nio.file.Path path) { }
-        @Override public List<String> scanIds(String text) { return List.of(); }
-        @Override public String metadataHint(String id) { return ""; }
-        @Override public void evictIfOverBudget() { }
-    }
+    // 阶段 5:NoopStore 删除 —— FileSystemToolResultStore 整个被砍,不需要 stub
 
     static class NoopTracker implements SideEffectTracker {
         @Override public void bind(String e) { }

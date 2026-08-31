@@ -5,16 +5,20 @@ import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import org.example.agent.context.builder.ContextBuilder;
 import org.example.agent.core.runtime.ReactAgentProvider;
 import org.example.agent.core.task.AgentTask;
+import org.example.agent.tool.spi.ToolDescriptorRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.chat.model.ChatModel;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * ReactAgentProvider（part3.md §6.1 两层字典上下文）。
@@ -25,6 +29,9 @@ import java.util.Map;
  *       整体交给 {@code ReactAgent.builder()}.systemPrompt() 不再支持多段，固这里直接用 messages。spring-ai-alibaba
  *       的 ReactAgent 在没有 systemPrompt 时仍可工作（tool 仍可见）。</li>
  *   <li>工具列表（tool schema）由 Spring AI 的 ToolCallback 自动并入 —— 与 Provider 解耦（结构化通道）。</li>
+ *   <li>工具物理隔离（阶段 1 引入）：当 {@code AgentTask.agentRole == "subagent"} 时，
+ *       扫描到的 bean 中其 {@code @Tool} 方法若对应 {@link org.example.agent.tool.spi.ToolDescriptor#mainAgentOnly()}=true，
+ *       则跳过该方法所属 bean，确保 SubAgent 工具注册层拿不到主 Agent 专属工具。</li>
  *   <li>ProjectContextCache 不再被此 provider 依赖（part3.md §6.7 ProjectScanner 不再作为启动组件）。</li>
  * </ul>
  */
@@ -35,17 +42,20 @@ public class SpringAiReactAgentProvider implements ReactAgentProvider {
     private final ObjectProvider<ToolCallbackProvider> toolCallbackProvider;
     private final ChatModel chatModel;
     private final ContextBuilder contextBuilder;
+    private final ToolDescriptorRegistry toolDescriptorRegistry;
 
     @Autowired
     public SpringAiReactAgentProvider(
             ObjectProvider<Object> beanProvider,
             ObjectProvider<ToolCallbackProvider> toolCallbackProvider,
             ChatModel chatModel,
-            ContextBuilder contextBuilder) {
+            ContextBuilder contextBuilder,
+            ToolDescriptorRegistry toolDescriptorRegistry) {
         this.beanProvider = beanProvider;
         this.toolCallbackProvider = toolCallbackProvider;
         this.chatModel = chatModel;
         this.contextBuilder = contextBuilder;
+        this.toolDescriptorRegistry = toolDescriptorRegistry;
     }
 
     @Override
@@ -57,6 +67,7 @@ public class SpringAiReactAgentProvider implements ReactAgentProvider {
         if (task.getInput() != null) vars.put("input", task.getInput());
         if (task.getSessionId() != null) vars.put("sessionId", task.getSessionId());
         if (task.getRole() != null) vars.put("role", task.getRole());
+        if (task.getAgentRole() != null) vars.put("agentRole", task.getAgentRole());
 
         // 两层字典上下文装配
         String systemPrompt = "";
@@ -84,7 +95,7 @@ public class SpringAiReactAgentProvider implements ReactAgentProvider {
                 .name(safeName(task.getRole(), "intelligent_assistant"))
                 .systemPrompt(systemPrompt);
 
-        Object[] methodTools = collectToolObjects();
+        Object[] methodTools = collectToolObjects(task.getAgentRole());
         if (methodTools.length > 0) {
             b.methodTools(methodTools);
         }
@@ -97,27 +108,64 @@ public class SpringAiReactAgentProvider implements ReactAgentProvider {
         return b.build();
     }
 
-    private Object[] collectToolObjects() {
-        List<Object> tools = new ArrayList<>();
+    /**
+     * 扫描 Spring 容器里所有含 {@code @Tool} 注解的 bean，按 {@code agentRole} 过滤。
+     *
+     * <p>主 Agent（agentRole=null 或 "main"）：返回所有含 @Tool 的 bean。
+     * SubAgent（agentRole="subagent"）：返回的 bean 中所有 @Tool 方法都必须在
+     * {@link ToolDescriptorRegistry} 中能找到且对应描述的 {@code mainAgentOnly=false}。
+     * 即"只要一个 bean 的任一 @Tool 方法是 mainAgentOnly，整个 bean 就被排除"
+     * —— 简单粗暴，避免 bean 内主/Sub 工具混杂。
+     */
+    Object[] collectToolObjects(String agentRole) {
         if (beanProvider == null) return new Object[0];
+        boolean isSubagent = "subagent".equalsIgnoreCase(agentRole);
+        Set<String> mainOnlyNames = isSubagent && toolDescriptorRegistry != null
+                ? toolDescriptorRegistry.all().stream()
+                    .filter(d -> d.mainAgentOnly())
+                    .map(d -> d.name())
+                    .collect(Collectors.toSet())
+                : Set.of();
+
+        List<Object> tools = new ArrayList<>();
         for (Object bean : beanProvider) {
             if (bean == null) continue;
-            boolean hasToolMethod = false;
-            try {
-                for (java.lang.reflect.Method m : bean.getClass().getMethods()) {
-                    if (m.isAnnotationPresent(org.springframework.ai.tool.annotation.Tool.class)) {
-                        hasToolMethod = true;
-                        break;
-                    }
-                }
-            } catch (Exception ex) {
+            if (!hasAnyToolMethod(bean)) continue;
+            if (isSubagent && beanContainsMainOnlyTool(bean, mainOnlyNames)) {
                 continue;
             }
-            if (hasToolMethod) {
-                tools.add(bean);
-            }
+            tools.add(bean);
         }
         return tools.toArray();
+    }
+
+    private boolean hasAnyToolMethod(Object bean) {
+        try {
+            for (Method m : bean.getClass().getMethods()) {
+                if (m.isAnnotationPresent(org.springframework.ai.tool.annotation.Tool.class)) {
+                    return true;
+                }
+            }
+        } catch (Exception ignore) {
+        }
+        return false;
+    }
+
+    private boolean beanContainsMainOnlyTool(Object bean, Set<String> mainOnlyNames) {
+        if (mainOnlyNames.isEmpty()) return false;
+        try {
+            for (Method m : bean.getClass().getMethods()) {
+                if (!m.isAnnotationPresent(org.springframework.ai.tool.annotation.Tool.class)) continue;
+                org.springframework.ai.tool.annotation.Tool ann =
+                        m.getAnnotation(org.springframework.ai.tool.annotation.Tool.class);
+                String toolName = (ann.name() != null && !ann.name().isBlank()) ? ann.name() : m.getName();
+                if (mainOnlyNames.contains(toolName)) {
+                    return true;
+                }
+            }
+        } catch (Exception ignore) {
+        }
+        return false;
     }
 
     private String legacySystemPrompt(AgentTask task, Map<String, Object> vars) {

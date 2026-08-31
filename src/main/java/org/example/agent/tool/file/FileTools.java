@@ -1,7 +1,6 @@
 package org.example.agent.tool.file;
 
 import org.example.agent.tool.ToolExecutionException;
-import org.example.agent.tool.cache.ToolResultStore;
 import org.example.agent.tool.failure.FailureKind;
 import org.example.agent.tool.failure.ToolErrorCode;
 import org.example.agent.tool.rollback.SideEffectTracker;
@@ -38,12 +37,10 @@ public class FileTools {
 
     private final PathGate pathGate;
     private final SideEffectTracker sideEffects;
-    private final ToolResultStore resultStore;
 
-    public FileTools(PathGate pathGate, SideEffectTracker sideEffects, ToolResultStore resultStore) {
+    public FileTools(PathGate pathGate, SideEffectTracker sideEffects) {
         this.pathGate = pathGate;
         this.sideEffects = sideEffects;
-        this.resultStore = resultStore;
     }
 
     @Tool(description = "读取文件指定行范围。startLine/endLine 都是 1-based，包含两端。"
@@ -104,10 +101,7 @@ public class FileTools {
             Files.writeString(real, content, StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE,
                     StandardOpenOption.TRUNCATE_EXISTING);
-            // 失效依赖此文件的所有外置缓存(read_file / list_dir / edit_file 快照等)
-            if (resultStore != null) {
-                resultStore.invalidateByPath(real);
-            }
+            // 阶段 5:工具结果不再单独存盘 —— 不需要 invalidate 外置缓存。
             return "wrote " + content.length() + " bytes to " + real;
         } catch (IOException ioe) {
             throw new ToolExecutionException(
@@ -152,10 +146,7 @@ public class FileTools {
             Files.writeString(real, updated, StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE,
                     StandardOpenOption.TRUNCATE_EXISTING);
-            // 失效依赖此文件的所有外置缓存
-            if (resultStore != null) {
-                resultStore.invalidateByPath(real);
-            }
+            // 阶段 5:工具结果不再单独存盘 —— 不需要 invalidate 外置缓存。
             return "edited " + real + " (" + oldText.length() + " -> " + newText.length() + " bytes)";
         } catch (ToolExecutionException tee) {
             throw tee;
